@@ -1,0 +1,10 @@
+langgraph>=0.6
+langgraph-checkpoint-postgres>=2.0
+psycopg[binary,pool]>=3.2
+anthropic>=0.40
+python-dotenv>=1.0
+playwright>=1.48
+pytest>=8.0
+pytest-playwright>=0.5
+pytest-json-report>=1.5
+allure-pytest>=2.13
