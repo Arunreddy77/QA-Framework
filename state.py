@@ -19,14 +19,16 @@ class RunState(TypedDict, total=False):
 
     # Per-skill outputs -- each is the parsed JSON the skill returned
     s1_output: dict
+    s2_output: dict  # NEW in Phase 2: tagged statements + ambiguity list from S2
+    h1_decision: dict  # NEW in Phase 2: the human's actual decision at the H1 gate
     s3_output: list
-    s4_output: list  # not built yet -- see run.py note on the Phase 1 gap
+    s4_output: list  # not built yet -- see nodes.py note on the remaining gap
     s5_output: list
     s6_output: dict
     s9_output: dict
 
     # Bookkeeping
-    status: str  # "running" | "escalated" | "complete" | "failed"
+    status: str  # "running" | "escalated" | "rejected_at_h1" | "complete" | "failed"
     escalation: Optional[dict]
     error: Optional[str]
 

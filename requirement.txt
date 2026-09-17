@@ -1,0 +1,27 @@
+Title: Password Reset via Email Link
+
+Description:
+As a registered user who has forgotten their password, I want to request a
+password reset link via email so that I can regain access to my account
+without contacting support.
+
+The user enters their email address on the "Forgot Password" page and
+submits the form. If the email matches a registered account, the system
+sends a reset link to that address. The user clicks the link, is taken to
+a "Reset Password" page, enters a new password, and confirms it. Once
+submitted, the user's password is updated and they are redirected to the
+login page.
+
+Acceptance Criteria:
+- Given a registered email address, when the user submits the forgot
+  password form, then a reset link is emailed to them within a reasonable
+  time.
+- Given an unregistered email address, when the user submits the form,
+  then the system should not reveal whether the account exists.
+- Given a valid reset link, when the user sets a new password that meets
+  the password policy, then the password is updated and they can log in
+  with it.
+- Given an expired or already-used reset link, when the user opens it,
+  then they should see an appropriate error message.
+- The reset link should expire after some time for security reasons.
+- Password confirmation must match the new password field.

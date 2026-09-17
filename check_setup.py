@@ -36,7 +36,11 @@ root = Path(os.environ.get("QA_FRAMEWORK_ROOT", ".")).resolve()
 print(f"Looking in: {root}\n")
 
 # 1. Core files that should sit directly in the folder
-core_files = ["AGENT_INSTRUCTIONS.md", "state.py", "llm_gateway.py", "nodes.py", "graph.py", "run.py", "requirements.txt"]
+core_files = [
+    "AGENT_INSTRUCTIONS.md", "state.py", "llm_gateway.py", "nodes.py", "graph.py",
+    "run.py", "requirements.txt", "evidence_store.py",
+    "knowledge_store.py", "resume.py",  # new in Phase 2 -- S2/H1 support files
+]
 for filename in core_files:
     report((root / filename).exists(), f"{filename} present", f"Save {filename} directly inside {root}")
 
@@ -63,7 +67,6 @@ if skills_dir.exists():
         if exact_match:
             report(True, f"skills/{skill_file}")
         else:
-            # Help spot near-misses -- e.g. a slightly different filename
             close_matches = [f.name for f in skills_dir.glob("*.md") if skill_file.split("_")[0] in f.name]
             hint = f"Found similarly named file(s): {close_matches} -- rename to exactly '{skill_file}'" if close_matches else f"File not found -- add it as skills/{skill_file}"
             report(False, f"skills/{skill_file}", hint)
@@ -94,17 +97,31 @@ for import_name, pip_name in packages.items():
 
 print()
 
-# 5. Can we actually reach the Postgres database?
+# 5. Can we actually reach the Postgres database, and does it have
+#    both the LangGraph checkpoint tables AND the domain_rules table?
 db_url = os.environ.get("QA_FRAMEWORK_DATABASE_URL")
 if db_url:
     try:
         import psycopg
         with psycopg.connect(db_url, connect_timeout=5) as conn:
             report(True, "Database is reachable")
+
+            # domain_rules only exists after graph.py has been built at
+            # least once (knowledge_store.setup() creates it). A missing
+            # table here just means "you haven't run the framework yet",
+            # not that anything is broken.
+            table_check = conn.execute(
+                "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'domain_rules')"
+            ).fetchone()
+            report(
+                bool(table_check and table_check[0]),
+                "Domain Knowledge Store table exists (domain_rules)",
+                "This gets created automatically the first time you run run.py or resume.py -- not an error if you haven't run either yet.",
+            )
     except Exception as e:
-        report(False, "Database is reachable", f"Make sure Docker Desktop is open and you ran the 'docker run' command from step 4. Error detail: {e}")
+        report(False, "Database is reachable", f"Make sure Docker Desktop is open and the qa-framework-pg container is started. Error detail: {e}")
 else:
-    report(False, "Database is reachable", "QA_FRAMEWORK_DATABASE_URL isn't set -- check your .env file, or that you loaded it (see note below)")
+    report(False, "Database is reachable", "QA_FRAMEWORK_DATABASE_URL isn't set -- check your .env file")
 
 print()
 
@@ -115,7 +132,6 @@ import subprocess
 try:
     import playwright  # noqa: F401
     report(True, "Python package 'playwright' installed")
-    # Check the actual browser binaries are downloaded, not just the library
     check = subprocess.run(["playwright", "install", "--dry-run"], capture_output=True, text=True)
     report("chromium" in check.stdout.lower() or check.returncode == 0, "Playwright browsers downloaded", "Run: playwright install")
 except ImportError:
