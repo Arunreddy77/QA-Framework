@@ -22,6 +22,30 @@ Converts H2-approved test case specifications into executable Playwright automat
 
 ## 3. Required process
 
+**Step 0 — Language requirement (read this first): all output MUST be Python.** This is non-negotiable and applies to every script, UI or API:
+
+- Generated scripts MUST be valid Python, not JavaScript/TypeScript.
+- Each test function MUST be named with a `test_` prefix (pytest's discovery convention).
+- Each test function MUST accept Playwright's `page` fixture as a parameter (from `pytest-playwright`), e.g. `def test_forgot_password_valid_email(page):`.
+- Imports MUST use Python syntax (e.g. `import pytest`), never JavaScript/TypeScript import syntax (e.g. never `import { test, expect } from '@playwright/test'`).
+- Assertions MUST use Python's `assert` statement or Playwright Python's `expect()` from `playwright.sync_api` — never JavaScript's `expect()` from `@playwright/test`.
+- For API-layer test cases, use Python's `requests` library, or Playwright Python's `APIRequestContext` via the `request` fixture — never JavaScript's `fetch` or the `request` object from `@playwright/test`.
+
+Example of a correctly-formatted Python test function (UI layer):
+
+```python
+import pytest
+from playwright.sync_api import expect
+
+def test_forgot_password_valid_email(page):
+    page.goto("https://app.example.com/forgot-password")
+    page.get_by_label("Email").fill("registered.user@example.com")
+    page.get_by_role("button", name="Send reset link").click()
+    expect(page.get_by_text("If an account exists, a reset link has been sent.")).to_be_visible()
+```
+
+A script that is valid JavaScript/TypeScript Playwright but not valid Python fails this skill's job entirely, regardless of how correct its locators or assertions are — it cannot run in this project's Python/pytest test suite at all.
+
 **Step 1 — For UI test cases, choose locators in the required order:** role/label/text-based semantic locators first, `data-test-id` attributes next, CSS selectors after that. XPath only as a last resort, and only with a documented reason in the script's metadata. Never locate by dynamically generated IDs or framework-specific class names.
 
 **Step 2 — For UI test cases, use auto-wait by default.** Explicit waits are allowed only for network-idle or a specific, justified application-state condition — document why in the script comment. Hard-coded sleep statements are never acceptable; if a test seems to need one, that's a potential application timing bug to escalate, not a delay to add.
@@ -39,7 +63,7 @@ Converts H2-approved test case specifications into executable Playwright automat
 - `script_id`
 - `test_case_id` — the S3 output this script implements
 - `layer` — UI, API, or both
-- `script_code` — the executable Playwright script
+- `script_code` — the executable Playwright script, written in **Python** (per Section 3, Step 0) — never JavaScript/TypeScript
 - `locator_strategy_notes` — if UI: which strategy was used and why, especially if XPath was needed
 - `wait_strategy_notes` — if UI: any explicit waits used and their justification
 - `assertions` — restated plainly, so an H3 reviewer can check them against the S3 expected result without reading code

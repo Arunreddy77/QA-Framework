@@ -80,7 +80,16 @@ class SkillEscalation(Exception):
         super().__init__(payload.get("reason", "escalated"))
 
 
-def call_skill(skill_filename: str, input_payload: dict) -> dict:
+# Was hardcoded to 4096 for every skill -- too small for a skill like S3
+# that can emit many test cases in one JSON response, which was silently
+# truncating the response mid-string and breaking JSON parsing. 8192 is a
+# safe general default (comfortably under every provider's ceiling in use
+# here); call sites that expect a larger response should pass their own
+# max_tokens, e.g. nodes.py passes a higher value for S3.
+DEFAULT_MAX_TOKENS = 8192
+
+
+def call_skill(skill_filename: str, input_payload: dict, max_tokens: int = DEFAULT_MAX_TOKENS) -> dict:
     """
     Assemble the prompt for one skill invocation and call the model once.
     Returns the parsed JSON result. Raises SkillEscalation if the skill
@@ -102,7 +111,7 @@ def call_skill(skill_filename: str, input_payload: dict) -> dict:
     if PROVIDER == "anthropic":
         response = _client.messages.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": json.dumps(input_payload)}],
         )
@@ -114,7 +123,7 @@ def call_skill(skill_filename: str, input_payload: dict) -> dict:
         # in the messages list, and the reply is response.choices[0].
         response = _client.chat.completions.create(
             model=MODEL,
-            max_tokens=4096,
+            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(input_payload)},

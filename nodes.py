@@ -12,6 +12,7 @@ overview for what remains.
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from langgraph.types import interrupt
 from llm_gateway import call_skill, SkillEscalation
@@ -126,7 +127,11 @@ def s3_generate_test_cases(state: RunState) -> dict:
         "confirmed_domain_rules": knowledge_store.get_confirmed_rules(),
         "h1_decision": state.get("h1_decision", {}),
     }
-    output = call_skill("S3_test_case_generation.md", payload)
+    # S3 can emit many test cases in one JSON response -- the default
+    # budget (8192) was cutting it off mid-string. 32768 stays safely
+    # under every provider's ceiling in use here (Claude Haiku 4.5: 64K,
+    # OpenRouter's nemotron-3-ultra: 65536) while giving plenty of room.
+    output = call_skill("S3_test_case_generation.md", payload, max_tokens=32768)
     return {"s3_output": output}
 
 
@@ -137,7 +142,10 @@ def s5_generate_scripts(state: RunState) -> dict:
         # S4 wired in before this output should be trusted.
         "test_data": state.get("s4_output", []),
     }
-    output = call_skill("S5_test_script_generation.md", payload)
+    # Same truncation problem as S3 (see comment above), and worse here --
+    # full script code as JSON strings is more verbose per test case than
+    # S3's structured fields. Same safe ceiling applies.
+    output = call_skill("S5_test_script_generation.md", payload, max_tokens=32768)
     return {"s5_output": output}
 
 
@@ -149,7 +157,11 @@ def s6_execute(state: RunState) -> dict:
     isn't yet enforced in S5's own skill.md, only assumed here.
     """
     correlation_id = state["correlation_id"]
-    scripts = state["s5_output"]
+    # s5_output is the full skill response, {"scripts": [...]} -- not the
+    # list itself. Iterating the dict directly iterated over its keys
+    # (the string "scripts"), which is why script.get(...) below was
+    # blowing up with 'str' object has no attribute 'get'.
+    scripts = state["s5_output"].get("scripts", [])
 
     script_dir = scripts_dir(correlation_id)
     for script in scripts:
@@ -163,6 +175,13 @@ def s6_execute(state: RunState) -> dict:
 
     result = subprocess.run(
         [
+            # Bare "pytest" resolves via PATH, which can silently pick up
+            # an unrelated pytest install (e.g. one at ~/.local/bin) that
+            # doesn't have pytest-json-report/allure-pytest installed --
+            # sys.executable -m pytest guarantees the one in *this*
+            # venv, where those plugins actually live.
+            sys.executable,
+            "-m",
             "pytest",
             str(script_dir),
             "--screenshot=only-on-failure",
