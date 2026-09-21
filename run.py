@@ -32,10 +32,11 @@ def handle_result(result: dict, run_id: str) -> None:
         gate_payload = interrupts[0].value
         gate_name = gate_payload["gate"]
 
-        gate_file = run_evidence_dir(run_id) / f"{gate_name}_review.json"
+        run_dir = run_evidence_dir(run_id, result.get("run_slug"))
+        gate_file = run_dir / f"{gate_name}_review.json"
         gate_file.write_text(json.dumps(gate_payload, indent=2), encoding="utf-8")
 
-        decision_file = run_evidence_dir(run_id) / f"{gate_name}_decision.json"
+        decision_file = run_dir / f"{gate_name}_decision.json"
         decision_file.write_text(json.dumps({
             "approved": False,
             "new_confirmed_rules": [],

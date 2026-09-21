@@ -29,7 +29,7 @@ Converts H2-approved test case specifications into executable Playwright automat
 - Each test function MUST accept Playwright's `page` fixture as a parameter (from `pytest-playwright`), e.g. `def test_forgot_password_valid_email(page):`.
 - Imports MUST use Python syntax (e.g. `import pytest`), never JavaScript/TypeScript import syntax (e.g. never `import { test, expect } from '@playwright/test'`).
 - Assertions MUST use Python's `assert` statement or Playwright Python's `expect()` from `playwright.sync_api` — never JavaScript's `expect()` from `@playwright/test`.
-- For API-layer test cases, use Python's `requests` library, or Playwright Python's `APIRequestContext` via the `request` fixture — never JavaScript's `fetch` or the `request` object from `@playwright/test`.
+- For API-layer test cases, use Python's `requests` library (`import requests`; `requests.post(url, data={...}, timeout=...)`). Do NOT take a parameter named `request` in a test function: in pytest that name is pytest's own built-in fixture (not an HTTP client), and calling `.get()`/`.post()` on it fails. Never use JavaScript's `fetch` or the `request` object from `@playwright/test` either.
 
 Example of a correctly-formatted Python test function (UI layer):
 
@@ -59,6 +59,19 @@ A script that is valid JavaScript/TypeScript Playwright but not valid Python fai
 ---
 
 ## 4. Output format
+
+**The response MUST be a single JSON object shaped exactly as `{"scripts": [ ... ]}`.** The `scripts` array holds **exactly one script entry per approved test case from S3** — the same number of entries as S3 approved test cases, each entry's `test_case_id` matching one S3 test case. Never return a bare, unwrapped single-script object (a top-level `script_id`/`script_code` with no `scripts` array), never stop after the first test case, never omit an approved test case, and never add a script for a test case S3 did not approve. A response that breaks this shape stops the run before any test executes.
+
+Shape, shown with two approved test cases:
+
+```json
+{"scripts": [
+  {"script_id": "SC-001", "test_case_id": "TC-001", "layer": "API", "script_code": "...", "assertions": ["..."]},
+  {"script_id": "SC-002", "test_case_id": "TC-002", "layer": "UI", "script_code": "...", "assertions": ["..."]}
+]}
+```
+
+Each entry in the `scripts` array has these fields:
 
 - `script_id`
 - `test_case_id` — the S3 output this script implements

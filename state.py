@@ -12,6 +12,7 @@ import uuid
 class RunState(TypedDict, total=False):
     run_id: str
     correlation_id: str
+    run_slug: str  # readable evidence-folder prefix, made from the requirement's Title by S1 (see evidence_store.make_slug)
 
     # Input
     raw_input: str

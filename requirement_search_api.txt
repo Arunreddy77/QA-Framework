@@ -1,0 +1,10 @@
+Title: Product Search API - E-commerce Store
+
+Description: The system provides a public REST API for searching products in the store catalog. A user submits a search term, and the API returns matching products with their details. This must be tested against the live automationexercise.com test API at https://automationexercise.com/api/searchProduct.
+
+Acceptance Criteria:
+Given a valid search term like "top", a POST request to https://automationexercise.com/api/searchProduct with form field search_product=top returns HTTP 200 and a JSON body containing responseCode 200 and a non-empty products array.
+Given an empty search term, the API returns responseCode 400 and a products array.
+Given a search term with no matches such as "zzzznonexistentproduct", the API returns responseCode 200 with an empty products array.
+Each product in the response must include id, name, price, brand, and category fields.
+The API must respond within 5 seconds.

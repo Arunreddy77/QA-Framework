@@ -17,7 +17,7 @@ from pathlib import Path
 from langgraph.types import interrupt
 from llm_gateway import call_skill, SkillEscalation
 from state import RunState
-from evidence_store import scripts_dir, allure_results_dir, allure_report_dir, run_evidence_dir
+from evidence_store import scripts_dir, allure_results_dir, allure_report_dir, run_evidence_dir, make_slug
 import knowledge_store
 
 
@@ -58,13 +58,13 @@ def s1_normalize(state: RunState) -> dict:
             "unstructured_fragments": sections.get("unstructured_fragments", []),
             "original_source_reference": state["run_id"],
         }
-        return {"s1_output": output}
+        return {"s1_output": output, "run_slug": make_slug(output["title_summary"])}
 
     output = call_skill(
         "S1_input_normalization.md",
         {"raw_input": raw, "source_type": state.get("source_type", "other")},
     )
-    return {"s1_output": output}
+    return {"s1_output": output, "run_slug": make_slug(output.get("title_summary", ""))}
 
 
 def s2_ambiguity_detection(state: RunState) -> dict:
@@ -149,6 +149,48 @@ def s5_generate_scripts(state: RunState) -> dict:
     return {"s5_output": output}
 
 
+def _scripts_for_run(state: RunState) -> list:
+    """
+    The S5 scripts s6_execute should run -- but only after checking S5
+    actually covered what S3 approved. Raises (so pytest never starts)
+    instead of quietly running nothing, or only some of the approved
+    tests: a run that "completes" with 0 or a fraction of its tests is
+    worse than one that stops and says exactly why.
+
+    s5_output is the full skill response, {"scripts": [...]}, and
+    s3_output is {"test_cases": [...]}.
+    """
+    s5 = state["s5_output"]
+    scripts = s5.get("scripts", []) if isinstance(s5, dict) else []
+    s3 = state["s3_output"]
+    cases = s3.get("test_cases", []) if isinstance(s3, dict) else list(s3 or [])
+
+    if not scripts:
+        keys = sorted(s5) if isinstance(s5, dict) else type(s5).__name__
+        raise RuntimeError(
+            f"S5 produced no scripts (its response had top-level keys {keys}, "
+            f'expected {{"scripts": [...]}}) but S3 approved {len(cases)} test case(s) '
+            "-- not running pytest."
+        )
+
+    if len(scripts) != len(cases):
+        case_ids = [c.get("test_case_id") for c in cases if isinstance(c, dict)]
+        script_ids = [s.get("test_case_id") for s in scripts if isinstance(s, dict)]
+        missing = [i for i in case_ids if i not in script_ids]
+        extra = [i for i in script_ids if i not in case_ids]
+        detail = ""
+        if missing:
+            detail += f" No script for: {missing}."
+        if extra:
+            detail += f" Script(s) for test cases S3 didn't approve: {extra}."
+        raise RuntimeError(
+            f"S5 produced {len(scripts)} script(s) but S3 approved {len(cases)} test case(s)."
+            f"{detail} -- not running pytest."
+        )
+
+    return scripts
+
+
 def s6_execute(state: RunState) -> dict:
     """
     Runs the S5-generated Playwright scripts via pytest + pytest-playwright.
@@ -157,21 +199,18 @@ def s6_execute(state: RunState) -> dict:
     isn't yet enforced in S5's own skill.md, only assumed here.
     """
     correlation_id = state["correlation_id"]
-    # s5_output is the full skill response, {"scripts": [...]} -- not the
-    # list itself. Iterating the dict directly iterated over its keys
-    # (the string "scripts"), which is why script.get(...) below was
-    # blowing up with 'str' object has no attribute 'get'.
-    scripts = state["s5_output"].get("scripts", [])
+    run_slug = state.get("run_slug")  # None for runs started before slugs existed
+    scripts = _scripts_for_run(state)  # raises if S5 didn't cover every S3 test case
 
-    script_dir = scripts_dir(correlation_id)
+    script_dir = scripts_dir(correlation_id, run_slug)
     for script in scripts:
         test_case_id = script.get("test_case_id", "unknown")
         safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", str(test_case_id))
         script_path = script_dir / f"test_{safe_name}.py"
         script_path.write_text(script["script_code"], encoding="utf-8")
 
-    json_report_path = run_evidence_dir(correlation_id) / "pytest-report.json"
-    allure_dir = allure_results_dir(correlation_id)
+    json_report_path = run_evidence_dir(correlation_id, run_slug) / "pytest-report.json"
+    allure_dir = allure_results_dir(correlation_id, run_slug)
 
     result = subprocess.run(
         [
@@ -224,10 +263,11 @@ def s6_execute(state: RunState) -> dict:
 
 def s9_report(state: RunState) -> dict:
     correlation_id = state["correlation_id"]
+    run_slug = state.get("run_slug")
 
-    report_dir = allure_report_dir(correlation_id)
+    report_dir = allure_report_dir(correlation_id, run_slug)
     allure_gen = subprocess.run(
-        ["allure", "generate", str(allure_results_dir(correlation_id)), "-o", str(report_dir), "--clean"],
+        ["allure", "generate", str(allure_results_dir(correlation_id, run_slug)), "-o", str(report_dir), "--clean"],
         capture_output=True,
         text=True,
     )
