@@ -46,6 +46,9 @@ Work through these steps in order. Do not skip to generating test values before 
 For every test case produced, output:
 
 - `test_case_id` — unique within this run
+- `title` — a short, specific, human-readable name for this test case (e.g. "Reject discount code at 51% boundary"), not a restatement of the obligation
+- `pre_requisite` — the state the system/environment must already be in before this test can run (e.g. "User is on the checkout page with a valid, non-empty cart"). State "None" explicitly if the test genuinely has no precondition beyond a fresh session — never leave it blank.
+- `steps` — the ordered list of concrete actions a human or automation would perform, each one specific enough to write an assertion or a Playwright action from (e.g. ["Navigate to /checkout", "Enter '51' into the discount code field", "Click Apply"]) — this is the manual-test-case backbone S5 turns into actual script actions
 - `source_requirement_id` — traces back to the H1-confirmed requirement
 - `obligation` — the one-sentence statement from Step 1
 - `test_type` — BVA or EP, and which partition/boundary it covers
@@ -55,6 +58,8 @@ For every test case produced, output:
 - `expected_result_basis` — which requirement line, Domain Knowledge Store entry, or DECISION record the expected result was derived from (never "observed application behavior")
 - `source_tags` — the FACT/ASSUMPTION/INFERENCE/DECISION tags inherited from S2 for the underlying requirement; only requirements tagged FACT or DECISION may reach this skill in the first place, so this is a record, not a new judgment call
 - `duplicate_check` — either "new" or a reference to the existing test case ID it matches
+
+There is deliberately no `actual_result` field here — this skill runs before anything executes, so it cannot know one. The pipeline fills that in after S6 runs, from the real pass/fail outcome, not from this skill's output.
 
 ---
 
@@ -96,7 +101,7 @@ Every escalation follows the format defined in AGENT_INSTRUCTIONS.md Section 7 �
 - 50% → accepted (boundary explicitly included by "greater than 50%")
 - 51% → rejected (explicitly stated)
 
-**Output — three test cases**, each with its own `test_case_id`, all sharing `source_requirement_id` and `obligation`, each with `expected_result_basis` pointing at the same requirement sentence, none requiring inference because the requirement was explicit at every boundary.
+**Output — three test cases**, each with its own `test_case_id` and `title` (e.g. "Discount code at 51% is rejected"), a `pre_requisite` (e.g. "User has a cart with at least one item and is on the discount code entry screen"), `steps` (e.g. ["Navigate to the discount code field", "Enter '51'", "Submit the code"]), all sharing `source_requirement_id` and `obligation`, each with `expected_result_basis` pointing at the same requirement sentence, none requiring inference because the requirement was explicit at every boundary.
 
 If the requirement had instead said "the system must reject excessive discount codes" with no number given, Step 1 would fail — "excessive" isn't stated — and this skill would escalate for a human to confirm the actual threshold, rather than guessing 50% because that's a common value.
 

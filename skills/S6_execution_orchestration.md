@@ -26,7 +26,7 @@ Runs H3-approved automation scripts via Playwright MCP, under the environment an
 
 **Step 1 — Confirm environment pinning before running anything.** Browser version, OS, runtime, target app build, API schema version must all match what's recorded as pinned for this suite. If anything has drifted, halt and escalate before running — don't run against a drifted environment and flag it after.
 
-**Step 2 — Execute scripts per their configured mode** (headless by default; headed only if explicitly requested for a HITL debugging session), respecting the per-action and per-suite timeout ceilings already configured. Never extend a timeout mid-run to avoid a failure.
+**Step 2 — Execute scripts per their configured mode** (headless by default; headed -- a real, visible browser window, with an optional slow-motion delay between actions -- only when explicitly requested per run, e.g. for a HITL debugging session), respecting the per-action and per-suite timeout ceilings already configured. Never extend a timeout mid-run to avoid a failure.
 
 **Step 3 — Generate one correlation ID per test run**, attached to all UI evidence and API logs produced during that run, so a human can reconstruct the full picture of a single execution without manually cross-referencing timestamps.
 

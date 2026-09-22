@@ -92,10 +92,13 @@ def _run_in_background(run_id: str, invoke) -> None:
     t.start()
 
 
-def start_run(raw_requirement: str) -> str:
+def start_run(raw_requirement: str, headed: Optional[bool] = None, slow_mo_ms: Optional[int] = None) -> str:
     """Starts S1 -> ... -> (H1 pause or further) on a background thread.
-    Returns the run_id immediately; the caller polls get_status(run_id)."""
-    initial_state = new_run_state(raw_requirement)
+    Returns the run_id immediately; the caller polls get_status(run_id).
+    headed/slow_mo_ms fall back to the S6_HEADED/S6_SLOW_MO_MS env vars
+    when not given (see state.new_run_state) -- passing them here is what
+    lets the Submit screen request a visible browser per run."""
+    initial_state = new_run_state(raw_requirement, headed=headed, slow_mo_ms=slow_mo_ms)
     run_id = initial_state["run_id"]
     _run_in_background(run_id, lambda: _graph.invoke(initial_state, config=_config(run_id)))
     return run_id
@@ -347,11 +350,33 @@ def _sanitized_id(test_case_id) -> str:
     return _re.sub(r"[^a-zA-Z0-9_]", "_", str(test_case_id))
 
 
+def _synthesize_actual_result(result: Optional[dict], classification: Optional[dict]) -> str:
+    """S3 never produces an 'actual result' -- it runs before anything
+    executes. This assembles one from what actually happened: S6's real
+    pass/fail outcome, plus S7's classification+reasoning on a failure.
+    "Pending" before S6 has run at all, never blank."""
+    if result is None:
+        return "Pending — not yet executed"
+    status = result.get("status")
+    duration = result.get("duration_seconds")
+    duration_note = f" in {duration:.1f}s" if isinstance(duration, (int, float)) else ""
+    if status == "passed":
+        return f"Passed{duration_note}"
+    if status in ("failed", "error"):
+        label = (classification or {}).get("classification")
+        label_note = f" [{label}]" if label else ""
+        reason = (classification or {}).get("evidence_trail")
+        return f"Failed{duration_note}{label_note} — {reason}" if reason else f"Failed{duration_note}{label_note}"
+    return f"{status or 'unknown'}{duration_note}"
+
+
 def _test_case_rows(run_dir: Path, run_id: str) -> list[dict]:
-    """One row per S3 test case, joined with its S6 pass/fail result and S7
-    classification+reasoning where they exist -- what the Run Report
-    screen's table and failure-detail panel need. Reads test_cases.json
-    (S3's raw output) and the live checkpoint's s6_output/s7_output."""
+    """One row per S3 test case, joined with its S6 pass/fail result
+    (including its screenshot and log, captured on every test now, not
+    just failures) and S7 classification+reasoning where they exist --
+    what the Run Report screen's table, script viewer, and failure-detail
+    panel need. Reads test_cases.json (S3's raw output) and the live
+    checkpoint's s6_output/s7_output."""
     import json as _json
 
     test_cases_path = run_dir / "test_cases.json"
@@ -381,14 +406,21 @@ def _test_case_rows(run_dir: Path, run_id: str) -> list[dict]:
         classification = classifications_by_stem.get(stem)
         rows.append({
             "test_case_id": case.get("test_case_id"),
+            "title": case.get("title"),
+            "pre_requisite": case.get("pre_requisite"),
+            "steps": case.get("steps"),
             "obligation": case.get("obligation"),
             "test_type": case.get("test_type"),
             "layer": case.get("layer"),
             "expected_result": case.get("expected_result"),
+            "actual_result": _synthesize_actual_result(result, classification),
             "status": (result or {}).get("status", "not_run"),
             "duration_seconds": (result or {}).get("duration_seconds"),
             "classification": (classification or {}).get("classification"),
             "classification_reasoning": (classification or {}).get("evidence_trail"),
+            "screenshot_url": _evidence_url(str(run_dir / result["screenshot_path"])) if result and result.get("screenshot_path") else None,
+            "log_url": _evidence_url(str(run_dir / result["log_path"])) if result and result.get("log_path") else None,
+            "script_url": _evidence_url(str(run_dir / "scripts" / f"test_{stem}.py")),
         })
     return rows
 

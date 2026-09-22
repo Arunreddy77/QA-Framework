@@ -15,6 +15,19 @@
   <label>Requirement text</label>
   <textarea id="requirementText" rows="14" placeholder="Title: ...&#10;&#10;Description: ...&#10;&#10;Acceptance Criteria:&#10;- ..."></textarea>
 
+  <div class="card mt-lg" style="display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap;">
+    <label style="display:flex;align-items:center;gap:0.45rem;font-weight:600;cursor:pointer;">
+      <input type="checkbox" id="headedCheck" style="width:auto;">
+      Run headed — watch the browser live during S6
+    </label>
+    <label id="slowMoLabel" style="display:none;align-items:center;gap:0.45rem;font-weight:600;">
+      Slow motion
+      <input type="number" id="slowMoInput" value="150" min="0" step="50" style="width:80px;">
+      ms between actions
+    </label>
+    <span class="muted" style="font-size:0.78rem;">Off runs headless (default) — no visible window, faster.</span>
+  </div>
+
   <div class="flex-between mt-lg">
     <p class="muted" style="margin:0;">⏱ Typical run: 2–6 minutes, plus your time at any review gate</p>
     <button class="btn-primary" id="submitBtn">Submit requirement</button>
@@ -49,16 +62,25 @@ async function loadRecent() {
 }
 loadRecent();
 
+document.getElementById("headedCheck").addEventListener("change", (e) => {
+  document.getElementById("slowMoLabel").style.display = e.target.checked ? "flex" : "none";
+});
+
 document.getElementById("submitBtn").addEventListener("click", async () => {
   const text = document.getElementById("requirementText").value;
   if (!text.trim()) { alert("Paste a requirement first."); return; }
+  const headed = document.getElementById("headedCheck").checked;
   const btn = document.getElementById("submitBtn");
   btn.disabled = true;
   try {
     const { run_id } = await api("/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requirement: text }),
+      body: JSON.stringify({
+        requirement: text,
+        headed,
+        slow_mo_ms: headed ? parseInt(document.getElementById("slowMoInput").value, 10) || 0 : 0,
+      }),
     });
     location.href = `/static/run.html?id=${run_id}`;
   } catch (e) {

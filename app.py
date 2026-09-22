@@ -8,6 +8,7 @@ Open: http://127.0.0.1:8000
 """
 
 import os
+from typing import Optional
 
 from dotenv import load_dotenv
 load_dotenv()  # must run before importing pipeline_runner -> graph.py, which reads env vars at import time
@@ -27,6 +28,8 @@ app = FastAPI(title="QA Framework")
 
 class NewRun(BaseModel):
     requirement: str
+    headed: Optional[bool] = None  # None -> falls back to the S6_HEADED env var
+    slow_mo_ms: Optional[int] = None  # None -> falls back to S6_SLOW_MO_MS
 
 
 class H1Decision(BaseModel):
@@ -39,7 +42,7 @@ class H1Decision(BaseModel):
 def create_run(body: NewRun):
     if not body.requirement.strip():
         raise HTTPException(400, "Requirement text is empty.")
-    return {"run_id": pr.start_run(body.requirement)}
+    return {"run_id": pr.start_run(body.requirement, headed=body.headed, slow_mo_ms=body.slow_mo_ms)}
 
 
 @app.get("/runs")

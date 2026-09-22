@@ -255,9 +255,33 @@ def _scripts_for_run(state: RunState) -> list:
     return scripts
 
 
+def _find_screenshot(test_output_dir: Path) -> Path | None:
+    """pytest-playwright saves test-finished-N.png on a pass and
+    test-failed-N.png on a fail, inside its own nodeid-derived subfolder
+    under whatever --output dir it was given. Since we now give each test
+    its own --output root (test_output_dir), there's exactly one test's
+    artifacts under here -- no need to reproduce pytest-playwright's own
+    folder-naming/truncation scheme to find it, just glob for the file."""
+    matches = list(test_output_dir.glob("**/test-finished-*.png")) + list(test_output_dir.glob("**/test-failed-*.png"))
+    return matches[0] if matches else None
+
+
 def s6_execute(state: RunState) -> dict:
     """
-    Runs the S5-generated Playwright scripts via pytest + pytest-playwright.
+    Runs the S5-generated Playwright scripts via pytest + pytest-playwright --
+    one pytest invocation per script, not one for the whole batch. That
+    costs a bit of subprocess/interpreter startup overhead, but it's what
+    makes a screenshot, a log, and a pass/fail result deterministically
+    attributable to one specific test case, rather than needing to
+    reverse-engineer pytest-playwright's own nodeid-to-folder-name scheme
+    to match artifacts back to tests after a shared run.
+
+    Runs headed (a visible browser window) when state["headed"] is set --
+    per-run, from the Submit screen, or the S6_HEADED env var by default
+    (see state.new_run_state). state["slow_mo_ms"] (S6_SLOW_MO_MS) adds a
+    delay between actions when headed, so the run is actually watchable
+    rather than a blur.
+
     Depends on S5's output being valid Python with a `test_`-prefixed
     function using the `page` fixture -- see the earlier note that this
     isn't yet enforced in S5's own skill.md, only assumed here.
@@ -265,19 +289,31 @@ def s6_execute(state: RunState) -> dict:
     correlation_id = state["correlation_id"]
     run_slug = state.get("run_slug")  # None for runs started before slugs existed
     scripts = _scripts_for_run(state)  # raises if S5 didn't cover every S3 test case
+    headed = bool(state.get("headed"))
+    slow_mo_ms = int(state.get("slow_mo_ms") or 0)
 
     script_dir = scripts_dir(correlation_id, run_slug)
+    run_dir = run_evidence_dir(correlation_id, run_slug)
+    allure_dir = allure_results_dir(correlation_id, run_slug)
+    logs_dir = run_dir / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    playwright_output_dir = run_dir / "playwright-output"
+
+    all_tests = []  # merged "tests" entries, same shape pytest-json-report itself produces
+    screenshots = {}  # test_case_id -> path relative to run_dir, for _write... below to join onto results
+    logs = {}  # test_case_id -> path relative to run_dir
+    returncodes = []
+
     for script in scripts:
-        test_case_id = script.get("test_case_id", "unknown")
-        safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", str(test_case_id))
+        test_case_id = str(script.get("test_case_id", "unknown"))
+        safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", test_case_id)
         script_path = script_dir / f"test_{safe_name}.py"
         script_path.write_text(script["script_code"], encoding="utf-8")
 
-    json_report_path = run_evidence_dir(correlation_id, run_slug) / "pytest-report.json"
-    allure_dir = allure_results_dir(correlation_id, run_slug)
+        per_test_json = run_dir / f".pytest-report-{safe_name}.json"  # temp; merged into pytest-report.json below, not kept
+        per_test_output = playwright_output_dir / safe_name
 
-    result = subprocess.run(
-        [
+        args = [
             # Bare "pytest" resolves via PATH, which can silently pick up
             # an unrelated pytest install (e.g. one at ~/.local/bin) that
             # doesn't have pytest-json-report/allure-pytest installed --
@@ -286,33 +322,80 @@ def s6_execute(state: RunState) -> dict:
             sys.executable,
             "-m",
             "pytest",
-            str(script_dir),
-            "--screenshot=only-on-failure",
+            str(script_path),
+            "--screenshot=on",  # was only-on-failure -- captured on pass too now, per item 3
             "--video=retain-on-failure",
             "--tracing=retain-on-failure",
-            f"--json-report-file={json_report_path}",
+            f"--output={per_test_output}",
+            f"--json-report-file={per_test_json}",
             "--json-report",
             f"--alluredir={allure_dir}",
             "-v",
-        ],
-        capture_output=True,
-        text=True,
+        ]
+        if headed:
+            args.append("--headed")
+            if slow_mo_ms:
+                args.append(f"--slowmo={slow_mo_ms}")
+
+        result = subprocess.run(args, capture_output=True, text=True)
+        returncodes.append(result.returncode)
+
+        log_path = logs_dir / f"{safe_name}.log"
+        log_path.write_text(
+            f"$ {' '.join(args)}\n\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n",
+            encoding="utf-8",
+        )
+        # Keyed by safe_name (the sanitized filename stem), not the raw
+        # test_case_id -- that's what _script_stem(nodeid) below actually
+        # produces when looking these back up, since the script file is
+        # literally named test_{safe_name}.py.
+        logs[safe_name] = str(log_path.relative_to(run_dir))
+
+        screenshot = _find_screenshot(per_test_output)
+        if screenshot:
+            screenshots[safe_name] = str(screenshot.relative_to(run_dir))
+
+        try:
+            per_report = json.loads(per_test_json.read_text(encoding="utf-8"))
+            all_tests.extend(per_report.get("tests", []))
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass  # this script's own crash (e.g. syntax error) still shows up via returncode/log
+        finally:
+            per_test_json.unlink(missing_ok=True)
+
+    json_report_path = run_dir / "pytest-report.json"
+    json_report_path.write_text(
+        json.dumps({"tests": all_tests, "summary": {
+            "total": len(all_tests),
+            "passed": sum(1 for t in all_tests if t.get("outcome") == "passed"),
+            "failed": sum(1 for t in all_tests if t.get("outcome") in ("failed", "error")),
+        }}, indent=2),
+        encoding="utf-8",
     )
 
-    try:
-        pytest_report = json.loads(json_report_path.read_text(encoding="utf-8"))
-        tests = pytest_report.get("tests", [])
-    except (FileNotFoundError, json.JSONDecodeError):
-        tests = []
-
-    results = [
-        {
-            "test_case_id": t.get("nodeid", "").split("::")[-1].replace("test_", "", 1),
+    results = []
+    for t in all_tests:
+        test_case_id = t.get("nodeid", "").split("::")[-1].replace("test_", "", 1)
+        stem = _script_stem(t.get("nodeid", ""))
+        results.append({
+            "test_case_id": test_case_id,
             "nodeid": t.get("nodeid"),
             "status": t.get("outcome", "unknown"),
             "duration_seconds": t.get("duration"),
-        }
-        for t in tests
+            "screenshot_path": screenshots.get(stem),
+            "log_path": logs.get(stem),
+        })
+
+    # 0 = passed, 1 = ran with failures -- both normal outcomes for a single
+    # script. Anything else (2 interrupted, 3 internal error, 4 usage error,
+    # 5 no tests collected) means that particular script's execution itself
+    # was broken, not just its assertions -- worth flagging. abnormal_scripts
+    # pairs each such script back to its own log, since "a shared stderr
+    # tail" doesn't mean much any more with N separate subprocess runs.
+    abnormal_scripts = [
+        {"test_case_id": str(script.get("test_case_id", "unknown")), "returncode": rc, "log_path": logs.get(re.sub(r"[^a-zA-Z0-9_]", "_", str(script.get("test_case_id", "unknown"))))}
+        for script, rc in zip(scripts, returncodes)
+        if rc not in (0, 1)
     ]
 
     return {
@@ -320,8 +403,9 @@ def s6_execute(state: RunState) -> dict:
             "run_id": state["run_id"],
             "correlation_id": correlation_id,
             "results": results,
-            "pytest_returncode": result.returncode,
-            "pytest_stderr_tail": result.stderr[-2000:] if result.returncode not in (0, 1) else None,
+            "headed": headed,
+            "pytest_returncode": max(returncodes) if returncodes else 0,
+            "abnormal_scripts": abnormal_scripts,
         }
     }
 

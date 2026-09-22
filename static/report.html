@@ -11,6 +11,28 @@
   .legend-dot { width:10px; height:10px; border-radius:50%; }
   .timeline-item { display:flex; align-items:center; gap:0.5rem; font-size:0.82rem; padding:0.3rem 0; }
   .search-box.small { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
+
+  .tc-row { border: 1px solid var(--hairline); border-radius: var(--radius-card); margin-bottom: 0.6rem; overflow: hidden; }
+  .tc-row.row-fail { border-color: rgba(208,59,59,0.35); }
+  .tc-head { display: flex; align-items: center; gap: 0.7rem; padding: 0.7rem 0.9rem; cursor: pointer; }
+  .tc-head:hover { background: rgba(0,0,0,0.02); }
+  .tc-chevron { transition: transform 0.15s; color: var(--text-muted); flex-shrink: 0; }
+  .tc-row.open .tc-chevron { transform: rotate(90deg); }
+  .tc-head .tc-id { font-family: ui-monospace, monospace; font-size: 0.78rem; color: var(--text-muted); flex-shrink: 0; width: 72px; }
+  .tc-head .tc-title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tc-head .tc-layer { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; }
+  .tc-body { display: none; border-top: 1px solid var(--hairline); padding: 1rem; }
+  .tc-row.open .tc-body { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  .tc-field { margin-bottom: 0.7rem; }
+  .tc-field .k { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); margin-bottom: 0.2rem; }
+  .tc-field .v { font-size: 0.85rem; }
+  .tc-field ol { margin: 0.2rem 0 0 1.1rem; padding: 0; font-size: 0.85rem; }
+  .tc-actual.pass { color: var(--good-text); }
+  .tc-actual.fail { color: var(--bad-text); }
+  .tc-actual.pending { color: var(--text-muted); }
+  .tc-screenshot { max-width: 100%; border-radius: 8px; border: 1px solid var(--hairline); margin-top: 0.3rem; cursor: zoom-in; }
+  .code-viewer { background: #16161a; color: #d7d7d2; border-radius: 10px; padding: 0.8rem 1rem; font-family: ui-monospace, monospace; font-size: 0.76rem; line-height: 1.55; max-height: 420px; overflow: auto; white-space: pre; }
+  .code-viewer.loading { color: #8a8a85; font-style: italic; }
 </style>
 </head>
 <body>
@@ -27,7 +49,6 @@
         <p class="muted" id="reportSub">—</p>
       </div>
       <div class="flex gap-sm">
-        <a class="btn" id="scriptsLink" href="#" target="_blank">Scripts folder</a>
         <a class="btn" id="xlsxLink" href="#">test_cases.xlsx</a>
         <a class="btn-primary" id="allureLink" href="#" target="_blank">Allure report</a>
       </div>
@@ -50,29 +71,19 @@
       </div>
 
       <div>
-        <div class="card">
-          <div class="flex-between">
-            <h3 style="margin:0;" id="tableTitle">Test cases</h3>
-            <input class="search-box small" id="tcFilter" placeholder="Filter test cases…">
-          </div>
-          <table class="mt-lg" id="tcTable"></table>
+        <div class="flex-between">
+          <h3 style="margin:0;" id="tableTitle">Test cases</h3>
+          <input class="search-box small" id="tcFilter" placeholder="Filter test cases…">
         </div>
-
-        <div class="card mt-lg" id="failureDetail" style="display:none;">
-          <div class="grid-2">
-            <div>
-              <div class="flex-between"><strong id="failTestId">—</strong><span id="failChip"></span></div>
-              <div class="activity-log mt-lg" id="failError" style="white-space:pre-wrap;"></div>
-            </div>
-            <div>
-              <h3 style="margin-top:0;">S7 reasoning</h3>
-              <p class="secondary" id="failReasoning">—</p>
-            </div>
-          </div>
-        </div>
+        <p class="muted mt-lg" style="margin-top:0.5rem;">Click a test case to see its steps, expected/actual result, screenshot, execution log, and the script that ran it, side by side.</p>
+        <div id="tcList" class="mt-lg"></div>
       </div>
     </div>
   </div>
+</div>
+
+<div id="lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:50;align-items:center;justify-content:center;cursor:zoom-out;" onclick="this.style.display='none';">
+  <img id="lightboxImg" style="max-width:92vw;max-height:92vh;border-radius:8px;">
 </div>
 
 <script src="/static/lib.js"></script>
@@ -90,21 +101,6 @@ const CLASS_COLORS = {
   automation_error: "#8a5cf0", unclassified_pending_triage: "var(--text-muted)",
 };
 
-function renderTable(rows) {
-  document.getElementById("tcTable").innerHTML = `
-    <tr><th>ID</th><th>Obligation</th><th>Type</th><th>Layer</th><th>Result</th></tr>
-    ${rows.map(r => `
-      <tr class="${r.status === "failed" ? "row-fail" : ""}" data-tc="${escapeHtml(r.test_case_id)}" style="cursor:${r.status === "failed" ? "pointer" : "default"};">
-        <td class="mono">${escapeHtml(r.test_case_id)}</td>
-        <td>${escapeHtml(r.obligation || "")}</td>
-        <td class="muted">${escapeHtml(r.test_type || "")}</td>
-        <td>${escapeHtml(r.layer || "")}</td>
-        <td>${resultChip(r)}</td>
-      </tr>`).join("") || `<tr><td colspan="5" class="empty-state">No test cases.</td></tr>`}
-  `;
-  document.querySelectorAll("tr[data-tc]").forEach(tr => tr.addEventListener("click", () => showFailure(tr.dataset.tc)));
-}
-
 function resultChip(r) {
   if (r.status === "passed") return `<span class="chip chip-good">PASS</span>`;
   if (r.status === "failed") return `<span class="chip chip-bad">FAIL${r.classification ? " · " + escapeHtml(CLASS_LABELS[r.classification] || r.classification) : ""}</span>`;
@@ -112,17 +108,84 @@ function resultChip(r) {
   return `<span class="chip chip-neutral">${escapeHtml(r.status || "")}</span>`;
 }
 
-function showFailure(tcId) {
-  const row = allRows.find(r => String(r.test_case_id) === tcId);
-  if (!row || row.status !== "failed") return;
-  document.getElementById("failureDetail").style.display = "block";
-  document.getElementById("failTestId").textContent = `${row.test_case_id} · failure detail`;
-  document.getElementById("failChip").innerHTML = row.classification
-    ? `<span class="chip" style="background:${CLASS_COLORS[row.classification]}22;color:${CLASS_COLORS[row.classification]};">${escapeHtml((CLASS_LABELS[row.classification] || row.classification).toUpperCase())}</span>`
-    : `<span class="chip chip-neutral">UNCLASSIFIED</span>`;
-  document.getElementById("failError").textContent = row.obligation ? `Expected: ${row.expected_result || "—"}` : "No detail available.";
-  document.getElementById("failReasoning").textContent = row.classification_reasoning || "No S7 reasoning recorded for this test.";
-  document.getElementById("failureDetail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+function stepsHtml(steps) {
+  if (!steps) return `<span class="muted">—</span>`;
+  const list = Array.isArray(steps) ? steps : [steps];
+  return `<ol>${list.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ol>`;
+}
+
+function actualResultClass(status) {
+  if (status === "passed") return "pass";
+  if (status === "failed" || status === "error") return "fail";
+  return "pending";
+}
+
+function renderCases(rows) {
+  document.getElementById("tcList").innerHTML = rows.map(r => `
+    <div class="tc-row ${r.status === "failed" ? "row-fail" : ""}" data-tc="${escapeHtml(r.test_case_id)}">
+      <div class="tc-head">
+        <svg class="tc-chevron" width="12" height="12" viewBox="0 0 12 12"><path d="M3 1 L9 6 L3 11" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <span class="tc-id">${escapeHtml(r.test_case_id)}</span>
+        <span class="tc-title">${escapeHtml(r.title || r.obligation || "(no title)")}</span>
+        <span class="tc-layer">${escapeHtml(r.layer || "")}</span>
+        ${resultChip(r)}
+      </div>
+      <div class="tc-body"></div>
+    </div>`).join("") || `<div class="empty-state">No test cases.</div>`;
+
+  document.querySelectorAll(".tc-row").forEach(row => {
+    row.querySelector(".tc-head").addEventListener("click", () => toggleRow(row));
+  });
+}
+
+async function toggleRow(row) {
+  const isOpen = row.classList.contains("open");
+  if (isOpen) { row.classList.remove("open"); return; }
+  row.classList.add("open");
+  const r = allRows.find(x => String(x.test_case_id) === row.dataset.tc);
+  if (!r) return;
+  const body = row.querySelector(".tc-body");
+  if (body.dataset.built) return;  // already rendered on a prior expand
+  body.dataset.built = "1";
+
+  body.innerHTML = `
+    <div>
+      <div class="tc-field"><div class="k">Pre-requisite</div><div class="v">${escapeHtml(r.pre_requisite || "—")}</div></div>
+      <div class="tc-field"><div class="k">Steps</div>${stepsHtml(r.steps)}</div>
+      <div class="tc-field"><div class="k">Expected Result</div><div class="v">${escapeHtml(r.expected_result || "—")}</div></div>
+      <div class="tc-field"><div class="k">Actual Result</div><div class="v tc-actual ${actualResultClass(r.status)}">${escapeHtml(r.actual_result || "—")}</div></div>
+      ${r.classification_reasoning ? `<div class="tc-field"><div class="k">S7 reasoning</div><div class="v secondary">${escapeHtml(r.classification_reasoning)}</div></div>` : ""}
+      <div class="tc-field">
+        <div class="k">Screenshot</div>
+        ${r.screenshot_url
+          ? `<img class="tc-screenshot" src="${r.screenshot_url}" onclick="event.stopPropagation(); openLightbox('${r.screenshot_url}')">`
+          : `<div class="muted">No screenshot captured.</div>`}
+      </div>
+      ${r.log_url ? `<div class="tc-field"><a href="${r.log_url}" target="_blank">Open execution log &rarr;</a></div>` : ""}
+    </div>
+    <div>
+      <div class="tc-field"><div class="k">Script</div></div>
+      <div class="code-viewer loading" id="code-${cssEscape(row.dataset.tc)}">Loading script…</div>
+    </div>
+  `;
+
+  const codeBox = body.querySelector(`#code-${cssEscape(row.dataset.tc)}`);
+  if (!r.script_url) { codeBox.textContent = "No script generated for this test case."; return; }
+  try {
+    const res = await fetch(r.script_url);
+    codeBox.textContent = res.ok ? await res.text() : `Couldn't load script (${res.status}).`;
+  } catch (e) {
+    codeBox.textContent = "Couldn't load script: " + e.message;
+  } finally {
+    codeBox.classList.remove("loading");
+  }
+}
+
+function cssEscape(s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, "_"); }
+
+function openLightbox(src) {
+  document.getElementById("lightboxImg").src = src;
+  document.getElementById("lightbox").style.display = "flex";
 }
 
 async function load() {
@@ -145,17 +208,9 @@ async function load() {
   if (!r.allure_report_url) document.getElementById("allureLink").style.display = "none";
   document.getElementById("xlsxLink").href = r.test_cases_xlsx_url || "#";
   if (!r.test_cases_xlsx_url) document.getElementById("xlsxLink").style.display = "none";
-  // Links straight to the first generated script file, not the bare scripts/
-  // directory -- FastAPI's StaticFiles mount 404s on a directory URL since
-  // it doesn't serve directory listings by default. No dedicated
-  // scripts-listing view exists yet, so this is the honest fallback; the
-  // label reflects there may be more than one.
-  if (r.scripts && r.scripts.length) {
-    document.getElementById("scriptsLink").href = r.scripts[0].url;
-    document.getElementById("scriptsLink").textContent = r.scripts.length > 1 ? `First script (of ${r.scripts.length})` : "Script";
-  } else {
-    document.getElementById("scriptsLink").style.display = "none";
-  }
+  // No more separate "scripts folder" link -- each script now renders
+  // inline inside its own test case row (see toggleRow), next to that
+  // case's steps/expected/actual result, screenshot, and log.
 
   const pct = counts.total ? Math.round(100 * counts.passed / counts.total) : null;
   document.getElementById("ringBox").innerHTML = renderRing(pct, { sub: `${counts.passed} of ${counts.total} passed` });
@@ -174,17 +229,22 @@ async function load() {
     `<div class="timeline-item">✓ ${escapeHtml(t.step)}</div>`).join("") || `<p class="muted">No timeline recorded.</p>`;
 
   allRows = r.test_cases || [];
-  renderTable(allRows);
+  renderCases(allRows);
   document.getElementById("tableTitle").textContent = `Test cases · ${allRows.length}`;
 
+  // Auto-expand the first failure, same as before -- it's the thing most
+  // worth looking at first when a run has one.
   const firstFailure = allRows.find(row => row.status === "failed");
-  if (firstFailure) showFailure(String(firstFailure.test_case_id));
+  if (firstFailure) {
+    const row = document.querySelector(`.tc-row[data-tc="${CSS.escape(String(firstFailure.test_case_id))}"]`);
+    if (row) { toggleRow(row); row.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+  }
 }
 
 document.getElementById("tcFilter").addEventListener("input", (e) => {
   const q = e.target.value.trim().toLowerCase();
-  const filtered = allRows.filter(r => !q || (r.test_case_id + " " + (r.obligation || "")).toLowerCase().includes(q));
-  renderTable(filtered);
+  const filtered = allRows.filter(r => !q || (r.test_case_id + " " + (r.title || "") + " " + (r.obligation || "")).toLowerCase().includes(q));
+  renderCases(filtered);
 });
 
 load();
