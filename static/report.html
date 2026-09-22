@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Run Report — QA Framework</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .legend { display:flex; flex-direction:column; gap:0.4rem; margin-top:0.8rem; font-size:0.82rem; }
+  .legend-item { display:flex; align-items:center; gap:0.5rem; }
+  .legend-dot { width:10px; height:10px; border-radius:50%; }
+  .timeline-item { display:flex; align-items:center; gap:0.5rem; font-size:0.82rem; padding:0.3rem 0; }
+  .search-box.small { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
+</style>
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar"></div>
+  <div class="main">
+    <p class="muted"><a href="library.html">&larr; Library</a></p>
+    <div class="flex-between">
+      <div>
+        <div class="flex gap-sm" style="align-items:center;">
+          <h1 style="margin:0;" id="reportTitle">—</h1>
+          <span id="statusChip"></span>
+        </div>
+        <p class="muted" id="reportSub">—</p>
+      </div>
+      <div class="flex gap-sm">
+        <a class="btn" id="scriptsLink" href="#" target="_blank">Scripts folder</a>
+        <a class="btn" id="xlsxLink" href="#">test_cases.xlsx</a>
+        <a class="btn-primary" id="allureLink" href="#" target="_blank">Allure report</a>
+      </div>
+    </div>
+
+    <div class="grid-2 mt-lg" style="grid-template-columns: 280px 1fr;">
+      <div>
+        <div class="card">
+          <div style="display:flex;justify-content:center;" id="ringBox"></div>
+          <div class="legend" id="legendBox"></div>
+        </div>
+        <div class="card mt-lg">
+          <h3>S7 failure classification</h3>
+          <div id="classificationBars" class="mt-lg"></div>
+        </div>
+        <div class="card mt-lg">
+          <h3>Pipeline timeline</h3>
+          <div id="timelineBox" class="mt-lg"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div class="flex-between">
+            <h3 style="margin:0;" id="tableTitle">Test cases</h3>
+            <input class="search-box small" id="tcFilter" placeholder="Filter test cases…">
+          </div>
+          <table class="mt-lg" id="tcTable"></table>
+        </div>
+
+        <div class="card mt-lg" id="failureDetail" style="display:none;">
+          <div class="grid-2">
+            <div>
+              <div class="flex-between"><strong id="failTestId">—</strong><span id="failChip"></span></div>
+              <div class="activity-log mt-lg" id="failError" style="white-space:pre-wrap;"></div>
+            </div>
+            <div>
+              <h3 style="margin-top:0;">S7 reasoning</h3>
+              <p class="secondary" id="failReasoning">—</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/lib.js"></script>
+<script>
+document.getElementById("sidebar").innerHTML = sidebarNav("Reports");
+const runId = qs("id");
+let allRows = [];
+
+const CLASS_LABELS = {
+  app_bug: "App bug", flaky: "Flaky", environment: "Environment",
+  automation_error: "Automation error", unclassified_pending_triage: "Pending triage",
+};
+const CLASS_COLORS = {
+  app_bug: "var(--bad)", flaky: "var(--warn)", environment: "var(--series-2)",
+  automation_error: "#8a5cf0", unclassified_pending_triage: "var(--text-muted)",
+};
+
+function renderTable(rows) {
+  document.getElementById("tcTable").innerHTML = `
+    <tr><th>ID</th><th>Obligation</th><th>Type</th><th>Layer</th><th>Result</th></tr>
+    ${rows.map(r => `
+      <tr class="${r.status === "failed" ? "row-fail" : ""}" data-tc="${escapeHtml(r.test_case_id)}" style="cursor:${r.status === "failed" ? "pointer" : "default"};">
+        <td class="mono">${escapeHtml(r.test_case_id)}</td>
+        <td>${escapeHtml(r.obligation || "")}</td>
+        <td class="muted">${escapeHtml(r.test_type || "")}</td>
+        <td>${escapeHtml(r.layer || "")}</td>
+        <td>${resultChip(r)}</td>
+      </tr>`).join("") || `<tr><td colspan="5" class="empty-state">No test cases.</td></tr>`}
+  `;
+  document.querySelectorAll("tr[data-tc]").forEach(tr => tr.addEventListener("click", () => showFailure(tr.dataset.tc)));
+}
+
+function resultChip(r) {
+  if (r.status === "passed") return `<span class="chip chip-good">PASS</span>`;
+  if (r.status === "failed") return `<span class="chip chip-bad">FAIL${r.classification ? " · " + escapeHtml(CLASS_LABELS[r.classification] || r.classification) : ""}</span>`;
+  if (r.status === "not_run") return `<span class="chip chip-neutral">NOT RUN</span>`;
+  return `<span class="chip chip-neutral">${escapeHtml(r.status || "")}</span>`;
+}
+
+function showFailure(tcId) {
+  const row = allRows.find(r => String(r.test_case_id) === tcId);
+  if (!row || row.status !== "failed") return;
+  document.getElementById("failureDetail").style.display = "block";
+  document.getElementById("failTestId").textContent = `${row.test_case_id} · failure detail`;
+  document.getElementById("failChip").innerHTML = row.classification
+    ? `<span class="chip" style="background:${CLASS_COLORS[row.classification]}22;color:${CLASS_COLORS[row.classification]};">${escapeHtml((CLASS_LABELS[row.classification] || row.classification).toUpperCase())}</span>`
+    : `<span class="chip chip-neutral">UNCLASSIFIED</span>`;
+  document.getElementById("failError").textContent = row.obligation ? `Expected: ${row.expected_result || "—"}` : "No detail available.";
+  document.getElementById("failReasoning").textContent = row.classification_reasoning || "No S7 reasoning recorded for this test.";
+  document.getElementById("failureDetail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function load() {
+  let r;
+  try { r = await api(`/runs/${runId}/report`); }
+  catch (e) {
+    document.querySelector(".main").innerHTML += `<div class="card mt-lg"><p>This run isn't complete yet, or wasn't found.</p><p><a href="run.html?id=${runId}">View live status &rarr;</a></p></div>`;
+    return;
+  }
+
+  document.getElementById("reportTitle").textContent = (r.run_slug || "Run").replace(/-/g, " ");
+  document.getElementById("statusChip").innerHTML = statusChipHtml("complete");
+  // test_counts/classification_breakdown come from pytest's own report and
+  // S7's normalized output -- reliable regardless of how S9 happened to
+  // phrase its own aggregate_metrics this run (see pipeline_runner.py).
+  const counts = r.test_counts || { passed: 0, failed: 0, total: 0 };
+  document.getElementById("reportSub").textContent = `run ${runId.slice(0, 8)} · ${counts.total} test(s)`;
+
+  document.getElementById("allureLink").href = r.allure_report_url || "#";
+  if (!r.allure_report_url) document.getElementById("allureLink").style.display = "none";
+  document.getElementById("xlsxLink").href = r.test_cases_xlsx_url || "#";
+  if (!r.test_cases_xlsx_url) document.getElementById("xlsxLink").style.display = "none";
+  document.getElementById("scriptsLink").href = r.scripts && r.scripts[0] ? r.scripts[0].url.replace(/\/[^/]+$/, "/") : "#";
+  if (!r.scripts || !r.scripts.length) document.getElementById("scriptsLink").style.display = "none";
+
+  const pct = counts.total ? Math.round(100 * counts.passed / counts.total) : null;
+  document.getElementById("ringBox").innerHTML = renderRing(pct, { sub: `${counts.passed} of ${counts.total} passed` });
+  document.getElementById("legendBox").innerHTML = `
+    <div class="legend-item"><span class="legend-dot" style="background:var(--good);"></span>Passed ${counts.passed}</div>
+    <div class="legend-item"><span class="legend-dot" style="background:var(--bad);"></span>Failed ${counts.failed}</div>
+  `;
+
+  const cls = r.classification_breakdown || {};
+  const clsRows = Object.entries(CLASS_LABELS).filter(([k]) => cls[k]).map(([k, label]) => ({ label, value: cls[k], color: CLASS_COLORS[k] }));
+  document.getElementById("classificationBars").innerHTML = clsRows.length
+    ? clsRows.map(row => `<div class="bar-row"><div>${row.label}</div><div class="bar-track"><div class="bar-fill" style="width:100%;background:${row.color};"></div></div><div class="mono">${row.value}</div></div>`).join("")
+    : `<p class="muted">No App bug, Flaky or Automation-error classifications this run.</p>`;
+
+  document.getElementById("timelineBox").innerHTML = (r.timeline || []).map(t =>
+    `<div class="timeline-item">✓ ${escapeHtml(t.step)}</div>`).join("") || `<p class="muted">No timeline recorded.</p>`;
+
+  allRows = r.test_cases || [];
+  renderTable(allRows);
+  document.getElementById("tableTitle").textContent = `Test cases · ${allRows.length}`;
+
+  const firstFailure = allRows.find(row => row.status === "failed");
+  if (firstFailure) showFailure(String(firstFailure.test_case_id));
+}
+
+document.getElementById("tcFilter").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  const filtered = allRows.filter(r => !q || (r.test_case_id + " " + (r.obligation || "")).toLowerCase().includes(q));
+  renderTable(filtered);
+});
+
+load();
+</script>
+</body>
+</html>

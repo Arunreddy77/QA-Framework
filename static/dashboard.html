@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard — QA Framework</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar"></div>
+  <div class="main">
+    <div class="flex-between">
+      <div>
+        <h1>Overview</h1>
+        <p class="muted" id="subtitle">Loading…</p>
+      </div>
+      <a class="btn-primary" href="/">+ New run</a>
+    </div>
+
+    <div class="stat-grid mt-lg" id="statGrid"></div>
+
+    <div class="grid-2 mt-lg">
+      <div class="card">
+        <h3>Pass rate by run</h3>
+        <div id="trendChart"></div>
+      </div>
+      <div class="card">
+        <h3>Tests by layer</h3>
+        <div id="layerChart" class="mt-lg"></div>
+      </div>
+    </div>
+
+    <div class="card mt-lg">
+      <div class="flex-between">
+        <h3 style="margin:0;">Recent runs</h3>
+        <a href="library.html">View all &rarr;</a>
+      </div>
+      <table class="mt-lg" id="recentTable"></table>
+    </div>
+  </div>
+</div>
+
+<script src="/static/lib.js"></script>
+<script>
+document.getElementById("sidebar").innerHTML = sidebarNav("Dashboard");
+
+function statTile(label, value, delta) {
+  return `<div class="stat-tile card">
+    <div class="label">${escapeHtml(label)}</div>
+    <div class="value">${value}</div>
+    ${delta ? `<div class="delta">${delta}</div>` : ""}
+  </div>`;
+}
+
+async function load() {
+  let d;
+  try { d = await api("/dashboard"); }
+  catch (e) { document.querySelector(".main").innerHTML = `<p>Couldn't load dashboard: ${escapeHtml(e.message)}</p>`; return; }
+
+  document.getElementById("subtitle").textContent = `${d.recent_runs.length} run(s) shown · across the requirements in evidence/`;
+
+  document.getElementById("statGrid").innerHTML = `
+    <div class="stat-tile card" style="display:flex;align-items:center;gap:1rem;">
+      ${renderRing(d.overall_pass_rate, { size: 84, stroke: 9 })}
+      <div><div class="label">Overall pass rate</div><div class="muted" style="font-size:0.78rem;">${d.total_tests} tests total</div></div>
+    </div>
+    ${statTile("Runs this month", d.runs_this_month)}
+    ${statTile("Awaiting your review", `<a href="library.html">${d.awaiting_review}</a>`, d.awaiting_review ? "Review now →" : "")}
+    ${statTile("Confirmed rules active", d.confirmed_rules_active)}
+  `;
+
+  const trendPoints = d.trend.map(t => ({ pass_rate: t.pass_rate, label: t.run_ref }));
+  document.getElementById("trendChart").innerHTML = renderTrendLine(trendPoints);
+
+  const layerRows = Object.entries(d.layer_totals).map(([label, value]) => ({ label, value }));
+  document.getElementById("layerChart").innerHTML = layerRows.some(r => r.value) ? renderBarChart(layerRows) : `<p class="muted">No test-case data yet.</p>`;
+
+  document.getElementById("recentTable").innerHTML = `
+    <tr><th>Requirement</th><th>Run</th><th>Tests</th><th>Result</th><th>Status</th></tr>
+    ${d.recent_runs.map(r => `
+      <tr>
+        <td><a href="report.html?id=${r.run_id}">${escapeHtml(r.title)}</a></td>
+        <td class="mono muted">${r.run_ref}</td>
+        <td>${r.counts ? r.counts.total : "—"}</td>
+        <td>${r.counts ? `<span style="color:${r.counts.failed ? "var(--bad)" : "var(--good)"};font-weight:700;">${r.counts.passed} / ${r.counts.total}</span>` : "—"}</td>
+        <td>${statusChipHtml(r.status)}</td>
+      </tr>`).join("")}
+  `;
+}
+load();
+</script>
+</body>
+</html>

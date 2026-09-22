@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Knowledge Store — QA Framework</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar"></div>
+  <div class="main">
+    <h1>Domain knowledge store</h1>
+    <p class="muted">Every rule confirmed at an H1 gate, across every requirement. Superseded rules are kept, never deleted, so history stays traceable.</p>
+    <div class="card mt-lg">
+      <table id="rulesTable"></table>
+    </div>
+  </div>
+</div>
+<script src="/static/lib.js"></script>
+<script>
+document.getElementById("sidebar").innerHTML = sidebarNav("Knowledge store");
+async function load() {
+  const rows = await api("/knowledge-store");
+  document.getElementById("rulesTable").innerHTML = `
+    <tr><th>Statement</th><th>Confirmed by run</th><th>Status</th></tr>
+    ${rows.map(r => `
+      <tr>
+        <td>${escapeHtml(r.statement)}</td>
+        <td class="mono muted">${escapeHtml(r.confirmed_by_run_id.slice(0, 8))}</td>
+        <td>${r.status === "confirmed" ? `<span class="chip chip-good">Active</span>` : `<span class="chip chip-neutral">Superseded</span>`}</td>
+      </tr>`).join("") || `<tr><td colspan="3" class="empty-state">No confirmed rules yet.</td></tr>`}
+  `;
+}
+load();
+</script>
+</body>
+</html>

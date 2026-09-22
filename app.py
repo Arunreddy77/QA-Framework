@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import pipeline_runner as pr
+import evidence_index as ei
 from evidence_store import EVIDENCE_ROOT
 
 app = FastAPI(title="QA Framework")
@@ -87,15 +88,59 @@ def run_results(run_id: str):
     return results
 
 
+@app.get("/runs/{run_id}/activity")
+def run_activity(run_id: str):
+    if pr.get_status(run_id)["status"] == "not_found":
+        raise HTTPException(404, f"No run found with id {run_id}.")
+    return pr.get_activity_log(run_id)
+
+
+@app.get("/runs/{run_id}/report")
+def run_report(run_id: str):
+    report = pr.get_report(run_id)
+    if report is None:
+        raise HTTPException(404, "This run hasn't completed yet.")
+    return report
+
+
+@app.get("/runs/{run_id}/scripts")
+def run_scripts(run_id: str):
+    results = pr.get_results(run_id)
+    if results is None:
+        raise HTTPException(404, "This run hasn't completed yet.")
+    return results["scripts"]
+
+
+@app.get("/dashboard")
+def dashboard():
+    return ei.dashboard_stats()
+
+
+@app.get("/requirements")
+def requirements():
+    return ei.requirements_library()
+
+
+@app.get("/knowledge-store")
+def knowledge_store_route():
+    return ei.knowledge_store_rows()
+
+
 # The evidence folder itself -- scripts, the Allure report, test_cases.xlsx/.json --
 # served as plain static files so the page can link straight to them.
 EVIDENCE_ROOT.mkdir(parents=True, exist_ok=True)
 app.mount("/evidence", StaticFiles(directory=str(EVIDENCE_ROOT)), name="evidence")
 
+# The page files themselves (style.css, lib.js, dashboard.html, etc.) -- kept at
+# /static/... so they don't collide with the JSON data routes above (GET /dashboard
+# is the aggregate-stats API; the Dashboard *page* is /static/dashboard.html).
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
+    return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
 
 
 if __name__ == "__main__":

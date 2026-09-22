@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>H1 Review — QA Framework</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .h1-layout { display: grid; grid-template-columns: 280px 1fr; gap: 2rem; align-items: start; }
+  @media (max-width: 800px) { .h1-layout { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="nav"></div>
+<div class="page-body" style="max-width:1200px;">
+  <div class="flex-between">
+    <div>
+      <div class="flex gap-sm" style="align-items:center;">
+        <h1 style="margin:0;">H1 — Requirement sign-off</h1>
+        <span class="chip chip-warn" id="awaitingChip">AWAITING YOU</span>
+      </div>
+      <p class="muted" id="subtitle">—</p>
+    </div>
+    <a class="btn" href="#" id="backLink">Back to run</a>
+  </div>
+
+  <div id="notPaused" style="display:none;" class="card"><p>This run isn't paused at H1 right now. <a href="#" id="backLink2">Back to its status page</a>.</p></div>
+
+  <div class="h1-layout mt-lg" id="mainArea" style="display:none;">
+    <div>
+      <div class="stmt-group-label" id="taggedCountLabel">Tagged statements</div>
+      <div id="taggedStatements"></div>
+    </div>
+    <div>
+      <div class="flex-between">
+        <h3 style="margin:0;" id="ambiguityCountLabel">Ambiguities need a decision</h3>
+        <span class="muted" style="font-size:0.78rem;">No AI calls happen while paused — take your time</span>
+      </div>
+      <div id="ambiguityList" class="mt-lg"></div>
+
+      <label class="mt-lg" style="display:block;">Notes (optional)</label>
+      <textarea id="h1Notes" rows="2" placeholder="Anything worth recording about this decision..."></textarea>
+
+      <div class="flex-between mt-lg">
+        <div></div>
+        <div class="flex gap-sm">
+          <button class="btn btn-danger" id="rejectBtn">Reject — stop here</button>
+          <button class="btn-primary" id="approveBtn">Approve &amp; continue to S3</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/lib.js"></script>
+<script>
+document.getElementById("nav").innerHTML = topbarNav("");
+const runId = qs("id");
+document.getElementById("backLink").href = `run.html?id=${runId}`;
+document.getElementById("backLink2").href = `run.html?id=${runId}`;
+
+const TAG_ORDER = ["FACT", "ASSUMPTION", "INFERENCE", "DECISION"];
+
+function renderTagged(statements) {
+  const groups = {};
+  for (const s of statements) (groups[s.tag] = groups[s.tag] || []).push(s);
+  document.getElementById("taggedCountLabel").textContent = `Tagged statements · ${statements.length}`;
+  document.getElementById("taggedStatements").innerHTML = TAG_ORDER.filter(t => groups[t]?.length).map(tag => `
+    <div class="stmt-group-label"><span class="tag-dot tag-dot-${tag}"></span>${tag} · ${groups[tag].length}</div>
+    ${groups[tag].map(s => `<div class="stmt stmt-${tag}">${escapeHtml(s.statement)}${s.layer ? ` <span class="muted">(${escapeHtml(s.layer)})</span>` : ""}</div>`).join("")}
+  `).join("") || `<p class="muted">No tagged statements.</p>`;
+}
+
+function renderAmbiguities(list) {
+  document.getElementById("ambiguityCountLabel").textContent = `${list.length} AMBIGUIT${list.length === 1 ? "Y" : "IES"} NEED${list.length === 1 ? "S" : ""} A DECISION`;
+  document.getElementById("ambiguityList").innerHTML = list.length ? list.map((a, i) => `
+    <div class="ambiguity-card">
+      <div class="head">
+        <strong>${escapeHtml(a.item)}</strong>
+        <span class="chip ${a.tag === "ASSUMPTION" ? "chip-warn" : "chip-neutral"}">${escapeHtml(a.tag || "")}</span>
+      </div>
+      <p class="muted" style="font-size:0.82rem;">${escapeHtml(a.description || "")}</p>
+      <label>Your resolution</label>
+      <input type="text" data-ambiguity-idx="${i}" placeholder="Resolved rule (leave blank to leave unresolved)">
+    </div>`).join("") : `<p class="muted">No ambiguities were flagged — this requirement is unambiguous enough to proceed as written.</p>`;
+}
+
+async function load() {
+  let h1;
+  try {
+    h1 = await api(`/runs/${runId}/h1`);
+  } catch (e) {
+    document.getElementById("notPaused").style.display = "block";
+    return;
+  }
+  document.getElementById("mainArea").style.display = "grid";
+  document.getElementById("subtitle").textContent = `run ${runId.slice(0, 8)}`;
+  renderTagged(h1.tagged_statements || []);
+  renderAmbiguities(h1.ambiguity_list || []);
+}
+load();
+
+async function submitDecision(approved) {
+  const inputs = document.querySelectorAll("#ambiguityList input[data-ambiguity-idx]");
+  const new_confirmed_rules = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+  document.getElementById("approveBtn").disabled = true;
+  document.getElementById("rejectBtn").disabled = true;
+  try {
+    await api(`/runs/${runId}/h1/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved, new_confirmed_rules, notes: document.getElementById("h1Notes").value }),
+    });
+    location.href = `run.html?id=${runId}`;
+  } catch (e) {
+    alert("Couldn't submit decision: " + e.message);
+    document.getElementById("approveBtn").disabled = false;
+    document.getElementById("rejectBtn").disabled = false;
+  }
+}
+document.getElementById("approveBtn").addEventListener("click", () => submitDecision(true));
+document.getElementById("rejectBtn").addEventListener("click", () => {
+  if (confirm("Reject this run? It will stop here -- nothing downstream will run.")) submitDecision(false);
+});
+</script>
+</body>
+</html>

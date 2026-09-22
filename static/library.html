@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Requirements Library — QA Framework</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app-shell">
+  <div id="sidebar"></div>
+  <div class="main">
+    <p class="muted"><a href="dashboard.html">&larr; Dashboard</a></p>
+    <div class="flex-between">
+      <h1 style="margin:0;">Requirements library</h1>
+      <a class="btn-primary" href="/">+ New run</a>
+    </div>
+
+    <div class="flex-between mt-lg" style="flex-wrap:wrap;gap:0.6rem;">
+      <input class="search-box" id="searchBox" placeholder="Search requirements…" style="min-width:220px;">
+      <div class="flex gap-sm" id="filterChips"></div>
+    </div>
+
+    <div class="card-grid mt-lg" id="cardGrid"></div>
+  </div>
+</div>
+
+<script src="/static/lib.js"></script>
+<script>
+document.getElementById("sidebar").innerHTML = sidebarNav("Requirements");
+
+const FILTERS = [
+  ["all", "All"],
+  ["passing", "Passing"],
+  ["needs_review", "Needs review"],
+  ["failing", "Failing"],
+];
+let activeFilter = "all";
+let allCards = [];
+
+function renderFilters(counts) {
+  document.getElementById("filterChips").innerHTML = FILTERS.map(([key, label]) =>
+    `<button class="filter-chip ${key === activeFilter ? "active" : ""}" data-filter="${key}">${label} · ${counts[key] || 0}</button>`
+  ).join("");
+  document.querySelectorAll(".filter-chip").forEach(btn =>
+    btn.addEventListener("click", () => { activeFilter = btn.dataset.filter; render(); })
+  );
+}
+
+function bucketCounts(cards) {
+  const c = { all: cards.length, passing: 0, needs_review: 0, failing: 0 };
+  for (const card of cards) if (c[card.bucket] != null) c[card.bucket]++;
+  return c;
+}
+
+function cardHtml(c) {
+  const reportHref = c.bucket === "needs_review" ? `h1.html?id=${c.latest_run_id}` : `report.html?id=${c.latest_run_id}`;
+  return `
+    <a href="${reportHref}" style="text-decoration:none;color:inherit;">
+    <div class="card" style="height:100%;">
+      <div class="flex-between">
+        <div>
+          <div style="font-weight:700;">${escapeHtml(c.title)}</div>
+          <div class="muted" style="font-size:0.78rem;">${c.run_count} run${c.run_count === 1 ? "" : "s"}</div>
+        </div>
+        ${statusChipHtml(c.status)}
+      </div>
+      <div class="mt-lg" style="display:flex;justify-content:center;">
+        ${c.pass_rate != null ? renderRing(c.pass_rate, { size: 100, stroke: 10 }) : `<div class="muted" style="padding:1.5rem 0;">${c.bucket === "needs_review" ? "Awaiting your decision at H1" : "No test results yet"}</div>`}
+      </div>
+      <div class="hairline-top mt-lg flex-between" style="font-size:0.8rem;">
+        <span class="muted">Last run</span><span>${fmtDate(c.last_run_mtime)}</span>
+      </div>
+      ${c.counts ? `<div class="flex-between" style="font-size:0.8rem;"><span class="muted">Tests</span><span>${c.counts.passed} passed, ${c.counts.failed} failed</span></div>` : ""}
+      ${c.escalation_reason ? `<div class="muted mt-lg" style="font-size:0.78rem;">${escapeHtml(c.escalation_reason)}</div>` : ""}
+    </div></a>`;
+}
+
+function render() {
+  const q = document.getElementById("searchBox").value.trim().toLowerCase();
+  const filtered = allCards.filter(c =>
+    (activeFilter === "all" || c.bucket === activeFilter) &&
+    (!q || c.title.toLowerCase().includes(q))
+  );
+  document.getElementById("cardGrid").innerHTML = filtered.length
+    ? filtered.map(cardHtml).join("")
+    : `<div class="empty-state">No requirements match.</div>`;
+  renderFilters(bucketCounts(allCards));
+}
+
+async function load() {
+  try { allCards = await api("/requirements"); }
+  catch (e) { document.querySelector(".main").innerHTML += `<p>Couldn't load: ${escapeHtml(e.message)}</p>`; return; }
+  render();
+}
+document.getElementById("searchBox").addEventListener("input", render);
+load();
+</script>
+</body>
+</html>

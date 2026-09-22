@@ -4,262 +4,67 @@
 <meta charset="utf-8">
 <title>QA Framework</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root { color-scheme: light dark; }
-  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
-  h1 { font-size: 1.3rem; }
-  h2 { font-size: 1.05rem; margin-top: 2rem; }
-  textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; font-size: 0.85rem; }
-  button { cursor: pointer; padding: 0.5rem 1rem; font-size: 0.9rem; }
-  button:disabled { cursor: not-allowed; opacity: 0.5; }
-  .steps { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
-  .steps li { padding: 0.3rem 0.6rem; border-radius: 4px; background: #eee; font-size: 0.8rem; }
-  .steps li.done { background: #d6f5d6; }
-  .steps li.current { background: #fff3b0; font-weight: bold; }
-  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
-  .badge.running, .badge.starting { background: #fff3b0; }
-  .badge.paused_at_h1 { background: #ffd8a8; }
-  .badge.complete { background: #d6f5d6; }
-  .badge.failed, .badge.escalated, .badge.rejected_at_h1 { background: #ffc9c9; }
-  .stmt { padding: 0.4rem 0.6rem; margin: 0.2rem 0; border-radius: 4px; font-size: 0.85rem; }
-  .stmt.FACT { background: #e7f5ff; }
-  .stmt.ASSUMPTION { background: #fff9db; }
-  .stmt.INFERENCE { background: #f3f0ff; }
-  .stmt.DECISION { background: #e6fcf5; }
-  .ambiguity { border: 1px solid #ddd; border-radius: 6px; padding: 0.6rem; margin: 0.6rem 0; }
-  .ambiguity input { width: 100%; box-sizing: border-box; margin-top: 0.3rem; }
-  table { border-collapse: collapse; margin: 0.5rem 0; }
-  td, th { border: 1px solid #ddd; padding: 0.3rem 0.6rem; font-size: 0.85rem; text-align: left; }
-  .error-box { background: #ffc9c9; padding: 0.6rem; border-radius: 6px; white-space: pre-wrap; font-size: 0.85rem; }
-  .muted { color: #777; font-size: 0.85rem; }
-  ul.scripts { columns: 2; font-size: 0.85rem; }
-  #newRunBtn { margin-top: 1rem; }
-</style>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<div id="nav"></div>
+<div class="page-body">
+  <h1>Submit a requirement</h1>
+  <p class="secondary">Paste a BRD, Jira ticket, user story or acceptance criteria. The pipeline runs S1 through S9, and pauses for your review whenever it needs a human decision.</p>
 
-<h1>QA Framework</h1>
-<p class="muted">Paste a requirement (Title / Description / Acceptance Criteria), submit it, and follow it through S1 → S2 → H1 → S3 → S5 → S6 → S7 → S9.</p>
+  <label>Requirement text</label>
+  <textarea id="requirementText" rows="14" placeholder="Title: ...&#10;&#10;Description: ...&#10;&#10;Acceptance Criteria:&#10;- ..."></textarea>
 
-<div id="submitPanel">
-  <textarea id="requirementText" rows="12" placeholder="Title: ...&#10;&#10;Description: ...&#10;&#10;Acceptance Criteria:&#10;- ..."></textarea>
-  <div style="margin-top: 0.5rem;">
-    <button id="submitBtn">Submit requirement</button>
+  <div class="flex-between mt-lg">
+    <p class="muted" style="margin:0;">⏱ Typical run: 2–6 minutes, plus your time at any review gate</p>
+    <button class="btn-primary" id="submitBtn">Submit requirement</button>
   </div>
+
+  <h2 class="mt-lg hairline-top" style="padding-top:1.6rem;">Recent runs</h2>
+  <div id="recentRuns" class="muted">Loading…</div>
 </div>
 
-<div id="runPanel" style="display:none;">
-  <h2>Run <span id="runIdLabel" class="muted"></span></h2>
-  <p><span id="statusBadge" class="badge"></span></p>
-  <ul id="stepsList" class="steps"></ul>
-  <div id="errorPanel"></div>
-  <button id="retryBtn" style="display:none;">Retry</button>
-
-  <div id="h1Panel" style="display:none;">
-    <h2>H1 — Human Review</h2>
-    <div id="taggedStatements"></div>
-    <h3>Ambiguities to resolve</h3>
-    <div id="ambiguityList"></div>
-    <label>Notes<br><textarea id="h1Notes" rows="2"></textarea></label>
-    <div style="margin-top: 0.5rem;">
-      <button id="approveBtn">Approve &amp; continue</button>
-      <button id="rejectBtn">Reject</button>
-    </div>
-  </div>
-
-  <div id="resultsPanel" style="display:none;">
-    <h2>Results</h2>
-    <p id="resultsSummary"></p>
-    <p id="resultsMetrics"></p>
-    <p id="unclassifiedNote" class="muted"></p>
-    <p>
-      <a id="allureLink" href="#" target="_blank">Open Allure report</a> &nbsp;|&nbsp;
-      <a id="xlsxLink" href="#">Download test_cases.xlsx</a> &nbsp;|&nbsp;
-      <a id="jsonLink" href="#">test_cases.json</a>
-    </p>
-    <h3>Generated scripts</h3>
-    <ul id="scriptsList" class="scripts"></ul>
-  </div>
-
-  <button id="newRunBtn">Start another run</button>
-</div>
-
+<script src="/static/lib.js"></script>
 <script>
-const $ = (id) => document.getElementById(id);
-let currentRunId = null;
-let pollTimer = null;
+document.getElementById("nav").innerHTML = topbarNav("New run");
 
-async function api(path, opts) {
-  const res = await fetch(path, opts);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `${res.status} ${res.statusText}`);
-  }
-  return res.status === 204 ? null : res.json();
-}
-
-const STEP_LABELS = [
-  "S1: Normalize requirement", "S2: Ambiguity detection", "H1: Human review",
-  "S3: Generate test cases", "S5: Generate scripts", "S6: Execute tests",
-  "S7: Classify failures", "S9: Report",
-];
-
-function renderSteps(completed, current) {
-  $("stepsList").innerHTML = STEP_LABELS.map(label => {
-    const cls = completed.includes(label) ? "done" : (label === current ? "current" : "");
-    return `<li class="${cls}">${label}</li>`;
-  }).join("");
-}
-
-function renderError(status) {
-  const box = $("errorPanel");
-  if (status.status === "failed") {
-    box.innerHTML = `<div class="error-box"><strong>Run failed.</strong>\n${escapeHtml(status.error || "")}</div>`;
-  } else if (status.status === "escalated") {
-    box.innerHTML = `<div class="error-box"><strong>Run escalated.</strong>\n${escapeHtml(JSON.stringify(status.escalation, null, 2))}</div>`;
-  } else if (status.status === "rejected_at_h1") {
-    box.innerHTML = `<div class="error-box"><strong>Rejected at H1.</strong> This run stopped here; nothing downstream ran.</div>`;
-  } else {
-    box.innerHTML = "";
-  }
-  $("retryBtn").style.display = ["failed", "escalated", "unknown_or_idle"].includes(status.status) ? "inline" : "none";
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
-
-async function refreshStatus() {
-  if (!currentRunId) return;
-  let status;
+async function loadRecent() {
+  const box = document.getElementById("recentRuns");
   try {
-    status = await api(`/runs/${currentRunId}/status`);
+    const runs = await api("/dashboard");
+    const rows = runs.recent_runs.slice(0, 6);
+    if (!rows.length) { box.innerHTML = `<p class="muted">No runs yet -- submit one above to get started.</p>`; return; }
+    box.innerHTML = rows.map(r => `
+      <a href="${r.status === 'paused_at_h1' ? 'h1.html' : 'report.html'}?id=${r.run_id}" style="text-decoration:none;color:inherit;">
+      <div class="card flex-between" style="margin-bottom:0.6rem;">
+        <div>
+          <div style="font-weight:700;">${escapeHtml(r.title)}</div>
+          <div class="muted" style="font-size:0.78rem;">${fmtDate(r.mtime)} · run ${r.run_ref}</div>
+        </div>
+        ${statusChipHtml(r.status)}
+      </div></a>`).join("");
   } catch (e) {
-    return; // transient; try again next tick
-  }
-  $("statusBadge").textContent = status.status;
-  $("statusBadge").className = "badge " + status.status;
-  renderSteps(status.steps_completed, status.current_step);
-  renderError(status);
-
-  if (status.status === "paused_at_h1") {
-    await showH1(currentRunId);
-  } else {
-    $("h1Panel").style.display = "none";
-  }
-
-  if (status.status === "complete") {
-    await showResults(currentRunId);
-    clearInterval(pollTimer);
-  } else if (["failed", "escalated", "rejected_at_h1"].includes(status.status)) {
-    clearInterval(pollTimer);
+    box.innerHTML = `<p class="muted">Couldn't load recent runs (${escapeHtml(e.message)}).</p>`;
   }
 }
+loadRecent();
 
-async function showH1(runId) {
-  const h1 = await api(`/runs/${runId}/h1`);
-  $("h1Panel").style.display = "block";
-  $("resultsPanel").style.display = "none";
-
-  $("taggedStatements").innerHTML = (h1.tagged_statements || []).map(s =>
-    `<div class="stmt ${s.tag}"><strong>${s.tag}</strong> — ${escapeHtml(s.statement)} <span class="muted">(${s.layer || ""})</span></div>`
-  ).join("") || "<p class='muted'>None.</p>";
-
-  const list = h1.ambiguity_list || [];
-  $("ambiguityList").innerHTML = list.length
-    ? list.map((a, i) => `
-        <div class="ambiguity">
-          <strong>${escapeHtml(a.item)}</strong> <span class="muted">[${a.tag || ""}]</span>
-          <p class="muted">${escapeHtml(a.description || "")}</p>
-          <input type="text" data-ambiguity-idx="${i}" placeholder="Resolved rule (leave blank to leave unresolved)">
-        </div>`).join("")
-    : "<p class='muted'>No ambiguities were flagged.</p>";
-}
-
-async function submitH1(approved) {
-  const inputs = document.querySelectorAll("#ambiguityList input[data-ambiguity-idx]");
-  const new_confirmed_rules = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
-  $("approveBtn").disabled = true;
-  $("rejectBtn").disabled = true;
-  try {
-    await api(`/runs/${currentRunId}/h1/decision`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ approved, new_confirmed_rules, notes: $("h1Notes").value }),
-    });
-    $("h1Panel").style.display = "none";
-    if (!pollTimer) pollTimer = setInterval(refreshStatus, 2000);
-  } catch (e) {
-    alert("Couldn't submit decision: " + e.message);
-  } finally {
-    $("approveBtn").disabled = false;
-    $("rejectBtn").disabled = false;
-  }
-}
-
-async function showResults(runId) {
-  const r = await api(`/runs/${runId}/results`);
-  $("resultsPanel").style.display = "block";
-  $("resultsSummary").textContent = r.summary || "";
-  $("resultsMetrics").textContent = r.aggregate_metrics ? JSON.stringify(r.aggregate_metrics) : "";
-  $("unclassifiedNote").textContent = r.unclassified_note || "";
-  $("allureLink").href = r.allure_report_url || "#";
-  $("allureLink").style.display = r.allure_report_url ? "inline" : "none";
-  $("xlsxLink").href = r.test_cases_xlsx_url || "#";
-  $("xlsxLink").style.display = r.test_cases_xlsx_url ? "inline" : "none";
-  $("jsonLink").href = r.test_cases_json_url || "#";
-  $("jsonLink").style.display = r.test_cases_json_url ? "inline" : "none";
-  $("scriptsList").innerHTML = (r.scripts || []).map(s => `<li><a href="${s.url}" target="_blank">${s.name}</a></li>`).join("");
-}
-
-$("submitBtn").addEventListener("click", async () => {
-  const text = $("requirementText").value;
+document.getElementById("submitBtn").addEventListener("click", async () => {
+  const text = document.getElementById("requirementText").value;
   if (!text.trim()) { alert("Paste a requirement first."); return; }
-  $("submitBtn").disabled = true;
+  const btn = document.getElementById("submitBtn");
+  btn.disabled = true;
   try {
     const { run_id } = await api("/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ requirement: text }),
     });
-    currentRunId = run_id;
-    $("runIdLabel").textContent = run_id;
-    $("submitPanel").style.display = "none";
-    $("runPanel").style.display = "block";
-    $("resultsPanel").style.display = "none";
-    $("h1Panel").style.display = "none";
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(refreshStatus, 2000);
-    refreshStatus();
+    location.href = `run.html?id=${run_id}`;
   } catch (e) {
     alert("Couldn't start run: " + e.message);
-  } finally {
-    $("submitBtn").disabled = false;
+    btn.disabled = false;
   }
-});
-
-$("retryBtn").addEventListener("click", async () => {
-  $("retryBtn").disabled = true;
-  try {
-    await api(`/runs/${currentRunId}/retry`, { method: "POST" });
-    if (!pollTimer) pollTimer = setInterval(refreshStatus, 2000);
-    refreshStatus();
-  } catch (e) {
-    alert("Couldn't retry: " + e.message);
-  } finally {
-    $("retryBtn").disabled = false;
-  }
-});
-
-$("approveBtn").addEventListener("click", () => submitH1(true));
-$("rejectBtn").addEventListener("click", () => submitH1(false));
-
-$("newRunBtn").addEventListener("click", () => {
-  if (pollTimer) clearInterval(pollTimer);
-  currentRunId = null;
-  $("submitPanel").style.display = "block";
-  $("runPanel").style.display = "none";
-  $("requirementText").value = "";
 });
 </script>
 </body>

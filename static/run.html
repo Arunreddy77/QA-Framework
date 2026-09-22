@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pipeline status — QA Framework</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .run-layout { display: flex; gap: 2rem; align-items: flex-start; }
+  .run-side { width: 240px; flex-shrink: 0; }
+  .kv { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.4rem 0; border-bottom: 1px solid var(--gridline); font-size: 0.82rem; }
+  .kv .k { color: var(--text-muted); flex-shrink: 0; }
+  .kv .v { text-align: right; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div id="nav"></div>
+<div class="page-body" style="max-width:1100px;">
+  <p><a href="/">&larr; Back to new run</a></p>
+  <div class="run-layout">
+    <div class="run-side">
+      <div class="muted" style="font-size:0.72rem;font-weight:700;text-transform:uppercase;">Requirement</div>
+      <h2 id="reqTitle" style="margin-top:0.3rem;">—</h2>
+      <div class="kv"><span class="k">Run ID</span><span class="mono v" id="runRef">—</span></div>
+      <div class="kv"><span class="k">Started</span><span class="v" id="startedAt">—</span></div>
+      <div class="kv"><span class="k">Elapsed</span><span class="v" id="elapsed">—</span></div>
+      <div class="kv"><span class="k">Model</span><span class="mono v" id="modelName" style="font-size:0.74rem;">—</span></div>
+      <h3 class="mt-lg">Status</h3>
+      <div id="statusCard" class="card">—</div>
+    </div>
+    <div style="flex:1;min-width:0;">
+      <h2>Pipeline progress</h2>
+      <p class="muted">Updates automatically — no need to refresh.</p>
+      <ul class="stepper" id="stepper"></ul>
+
+      <div id="banner"></div>
+
+      <h3 class="mt-lg">Activity log</h3>
+      <div class="activity-log" id="activityLog">Waiting for the run to start…</div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/lib.js"></script>
+<script>
+document.getElementById("nav").innerHTML = topbarNav("New run");
+const runId = qs("id");
+let pollTimer = null;
+let startTime = null;
+
+const STEP_LABELS = [
+  "S1\nNormalize", "S2\nAmbiguity", "H1\nYour review", "S3\nTest cases",
+  "S5\nScripts", "S6\nExecute", "S7\nClassify", "S9\nReport",
+];
+
+function renderStepper(completed, status) {
+  const currentIdx = completed.length;
+  document.getElementById("stepper").innerHTML = STEP_LABELS.map((label, i) => {
+    const [id, name] = label.split("\n");
+    let dotCls = "";
+    if (i < completed.length) dotCls = "done";
+    else if (i === currentIdx && status === "running") dotCls = "current";
+    const connector = i > 0 ? `<div class="connector ${i <= completed.length ? "done" : ""}"></div>` : "";
+    return `${connector}<li><div class="dot ${dotCls}">${dotCls === "done" ? "✓" : (dotCls === "current" ? "⏱" : "")}</div>
+      <div class="label">${id}</div><div class="muted" style="font-size:0.68rem;">${name}</div></li>`;
+  }).join("");
+}
+
+function renderBanner(status, statusData) {
+  const box = document.getElementById("banner");
+  if (status === "paused_at_h1") {
+    box.innerHTML = `<div class="banner">
+      <div><strong>Action needed: review requirement ambiguities</strong>
+        <div class="muted" style="font-size:0.82rem;">S2 found items that need a confirmed answer before test cases can be generated.</div></div>
+      <a class="btn btn-primary" href="h1.html?id=${runId}">Review now</a>
+    </div>`;
+  } else if (status === "failed") {
+    box.innerHTML = `<div class="banner" style="border-color:var(--bad);background:var(--bad-bg);">
+      <div><strong>Run failed</strong><div class="muted" style="font-size:0.82rem; white-space:pre-wrap;">${escapeHtml((statusData.error || "").split("\n")[0])}</div></div>
+      <button class="btn btn-danger" id="retryBtn">Retry</button>
+    </div>`;
+    document.getElementById("retryBtn").addEventListener("click", retry);
+  } else if (status === "escalated") {
+    box.innerHTML = `<div class="banner" style="border-color:var(--bad);background:var(--bad-bg);">
+      <div><strong>Run escalated</strong><div class="muted" style="font-size:0.82rem;">${escapeHtml((statusData.escalation || {}).reason || "")}</div></div>
+      <button class="btn btn-danger" id="retryBtn">Retry</button>
+    </div>`;
+    document.getElementById("retryBtn").addEventListener("click", retry);
+  } else if (status === "rejected_at_h1") {
+    box.innerHTML = `<div class="banner" style="border-color:var(--bad);background:var(--bad-bg);"><strong>Rejected at H1.</strong>&nbsp;This run stopped here; nothing downstream ran.</div>`;
+  } else if (status === "unknown_or_idle") {
+    box.innerHTML = `<div class="banner">
+      <div><strong>Status unknown</strong><div class="muted" style="font-size:0.82rem;">The server may have restarted mid-run. Retry to continue from the last completed step.</div></div>
+      <button class="btn" id="retryBtn">Retry</button>
+    </div>`;
+    document.getElementById("retryBtn").addEventListener("click", retry);
+  } else if (status === "complete") {
+    box.innerHTML = `<div class="banner" style="border-color:var(--good);background:var(--good-bg);">
+      <div><strong>Run complete</strong></div>
+      <a class="btn btn-primary" href="report.html?id=${runId}">View report</a>
+    </div>`;
+  } else {
+    box.innerHTML = "";
+  }
+}
+
+async function retry() {
+  try { await api(`/runs/${runId}/retry`, { method: "POST" }); startPolling(); refresh(); }
+  catch (e) { alert("Couldn't retry: " + e.message); }
+}
+
+async function renderActivityLog() {
+  try {
+    const timeline = await api(`/runs/${runId}/activity`);
+    if (timeline && timeline.length) {
+      document.getElementById("activityLog").innerHTML = timeline.map(e =>
+        `<div><span class="t">${new Date(e.at).toLocaleTimeString()}</span>${escapeHtml(e.step)}</div>`
+      ).join("");
+      // Use the real first-checkpoint time, not page-load time -- matters
+      // if this page is reopened for a run that started earlier.
+      const realStart = new Date(timeline[0].at).getTime();
+      if (!isNaN(realStart)) {
+        startTime = realStart;
+        document.getElementById("startedAt").textContent = fmtDate(realStart / 1000);
+      }
+    }
+  } catch (e) { /* nothing checkpointed yet -- fine, S1 hasn't finished */ }
+}
+
+async function refresh() {
+  let s;
+  try { s = await api(`/runs/${runId}/status`); }
+  catch (e) { document.getElementById("statusCard").innerHTML = `<span class="chip chip-bad">not found</span>`; return; }
+
+  document.getElementById("reqTitle").textContent = s.run_slug ? s.run_slug.replace(/-/g, " ") : "Requirement";
+  document.getElementById("runRef").textContent = runId.slice(0, 8);
+  document.getElementById("statusCard").innerHTML = `${statusChipHtml(s.status)}${s.current_step ? `<div class="muted mt-lg" style="margin-top:0.6rem;">On: ${escapeHtml(s.current_step)}</div>` : ""}`;
+  document.getElementById("modelName").textContent = s.model ? `${s.model} (${s.provider})` : "—";
+
+  renderStepper(s.steps_completed, s.status);
+  renderBanner(s.status, s);
+
+  if (s.status === "complete" || ["failed", "escalated", "rejected_at_h1"].includes(s.status)) {
+    if (pollTimer) clearInterval(pollTimer);
+  }
+  renderActivityLog();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(refresh, 2000);
+}
+
+if (!runId) {
+  document.querySelector(".page-body").innerHTML = `<p>No run id given. <a href="/">Start a new run</a>.</p>`;
+} else {
+  startTime = Date.now();
+  setInterval(() => { document.getElementById("elapsed").textContent = fmtElapsed((Date.now() - startTime) / 1000); }, 1000);
+  document.getElementById("startedAt").textContent = fmtDate(Date.now() / 1000);
+  refresh();
+  startPolling();
+}
+</script>
+</body>
+</html>

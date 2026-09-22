@@ -27,6 +27,7 @@ from langgraph.types import Command
 
 from graph import build_graph
 from state import new_run_state, RunState
+from llm_gateway import PROVIDER, MODEL
 from llm_gateway import SkillEscalation
 from evidence_store import EVIDENCE_ROOT, find_run_dir, run_evidence_dir
 from run import handle_result
@@ -194,6 +195,8 @@ def get_status(run_id: str) -> dict:
         "run_id": run_id,
         "status": status,
         "run_slug": values.get("run_slug"),
+        "provider": PROVIDER,
+        "model": MODEL,
         "steps_completed": completed,
         "current_step": (PIPELINE_STEPS[len(completed)][1] if status == "running" and len(completed) < len(PIPELINE_STEPS) else None),
         "error": reg.get("error"),
@@ -230,6 +233,49 @@ def _evidence_url(path: Optional[str]) -> Optional[str]:
     return f"/evidence/{rel.as_posix()}"
 
 
+# The 5 valid values in a normalized classification, in the display order the
+# Run Report screen's breakdown bar chart uses. Matches S7_CLASSIFICATIONS.
+CLASSIFICATION_ORDER = ["app_bug", "flaky", "environment", "automation_error", "unclassified_pending_triage"]
+
+
+def _classification_breakdown(values: dict) -> dict:
+    """Counts per classification, computed straight from S7's own
+    normalized output (nodes.s7_classify_failures already coerces every
+    label to one of CLASSIFICATION_ORDER -- see its docstring), not from
+    S9's free-form aggregate_metrics.by_classification. S9's version is
+    restated in whatever key phrasing the model chooses that call ("App
+    bug", "Unclassified/pending triage", ...) and isn't guaranteed to even
+    agree with S7's own verdict for the same test, since it's a separate
+    LLM call summarizing S6+S7's results in prose-adjacent JSON rather
+    than just echoing S7's structured labels back."""
+    counts = {k: 0 for k in CLASSIFICATION_ORDER}
+    for c in (values.get("s7_output") or {}).get("classifications", []):
+        label = c.get("classification")
+        if label in counts:
+            counts[label] += 1
+    return counts
+
+
+def _test_counts(run_dir: Optional[Path]) -> Optional[dict]:
+    """Pass/fail/total straight from pytest-json-report's own summary
+    block, which pytest writes deterministically -- not from S9's
+    aggregate_metrics.by_layer, whose key names have varied between runs
+    ("pass"/"fail"/"skip" vs "passed"/"failed"/"skipped"/"total"; see
+    _classification_breakdown's docstring for the same class of issue).
+    Trust the deterministic file over the model's restatement of it."""
+    if not run_dir:
+        return None
+    import json as _json
+    try:
+        report = _json.loads((run_dir / "pytest-report.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, _json.JSONDecodeError):
+        return None
+    summary = report.get("summary", {})
+    passed = summary.get("passed", 0)
+    failed = summary.get("failed", 0) + summary.get("error", 0)
+    return {"passed": passed, "failed": failed, "total": summary.get("total", passed + failed)}
+
+
 def get_results(run_id: str) -> Optional[dict]:
     values = _graph.get_state(_config(run_id)).values
     if not values.get("s9_output"):
@@ -244,6 +290,8 @@ def get_results(run_id: str) -> Optional[dict]:
         "run_slug": values.get("run_slug"),
         "summary": s9.get("human_readable_summary"),
         "aggregate_metrics": s9.get("aggregate_metrics"),
+        "test_counts": _test_counts(run_dir),
+        "classification_breakdown": _classification_breakdown(values),
         "unclassified_note": s9.get("unclassified_note"),
         "allure_report_url": _evidence_url(s9.get("allure_report_path")),
         "test_cases_json_url": _evidence_url(str(run_dir / "test_cases.json")) if run_dir and (run_dir / "test_cases.json").exists() else None,
@@ -265,3 +313,103 @@ def list_runs() -> list[dict]:
         values = _graph.get_state(_config(run_id)).values
         out.append({**s, "title": (values.get("s1_output") or {}).get("title_summary")})
     return out
+
+
+def get_activity_log(run_id: str) -> list[dict]:
+    """One entry per completed step, oldest first, with a real wall-clock
+    timestamp -- for the Pipeline Status screen's activity log. Built from
+    LangGraph's own checkpoint history (each checkpoint records when it was
+    written), not tracked separately."""
+    history = list(_graph.get_state_history(_config(run_id)))
+    if not history:
+        return []
+
+    step_names = {key: label for _, label, key in PIPELINE_STEPS}
+    entries = []
+    seen = set()
+    for snapshot in reversed(history):  # oldest first
+        for key, label in step_names.items():
+            if key in snapshot.values and snapshot.values[key] and key not in seen:
+                seen.add(key)
+                entries.append({"at": snapshot.created_at, "step": label})
+    return entries
+
+
+def _sanitized_id(test_case_id) -> str:
+    """The same substitution s6_execute applies to build each script's
+    filename (test_TC-API-1 -> test_TC_API_1.py) -- reproduced here so a
+    test case can be joined back to its S6 result/S7 classification by the
+    same key both were filed under. Without this, a test_case_id with any
+    non-alphanumeric character (a hyphen is the common case) never matches
+    its own result, and every row silently shows as "not run" even when it
+    actually passed."""
+    import re as _re
+    return _re.sub(r"[^a-zA-Z0-9_]", "_", str(test_case_id))
+
+
+def _test_case_rows(run_dir: Path, run_id: str) -> list[dict]:
+    """One row per S3 test case, joined with its S6 pass/fail result and S7
+    classification+reasoning where they exist -- what the Run Report
+    screen's table and failure-detail panel need. Reads test_cases.json
+    (S3's raw output) and the live checkpoint's s6_output/s7_output."""
+    import json as _json
+
+    test_cases_path = run_dir / "test_cases.json"
+    if not test_cases_path.exists():
+        return []
+    raw = _json.loads(test_cases_path.read_text(encoding="utf-8"))
+    cases = raw.get("test_cases", raw) if isinstance(raw, dict) else list(raw or [])
+
+    values = _graph.get_state(_config(run_id)).values
+    results_by_stem = {}
+    for r in (values.get("s6_output") or {}).get("results", []):
+        stem = _script_stem_safe(r.get("nodeid") or "")
+        if stem:
+            results_by_stem[stem] = r
+    classifications_by_stem = {}
+    for c in (values.get("s7_output") or {}).get("classifications", []):
+        stem = _script_stem_safe(c.get("nodeid") or "")
+        if stem:
+            classifications_by_stem[stem] = c
+
+    rows = []
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        stem = _sanitized_id(case.get("test_case_id", ""))
+        result = results_by_stem.get(stem)
+        classification = classifications_by_stem.get(stem)
+        rows.append({
+            "test_case_id": case.get("test_case_id"),
+            "obligation": case.get("obligation"),
+            "test_type": case.get("test_type"),
+            "layer": case.get("layer"),
+            "expected_result": case.get("expected_result"),
+            "status": (result or {}).get("status", "not_run"),
+            "duration_seconds": (result or {}).get("duration_seconds"),
+            "classification": (classification or {}).get("classification"),
+            "classification_reasoning": (classification or {}).get("evidence_trail"),
+        })
+    return rows
+
+
+def _script_stem_safe(nodeid: str) -> Optional[str]:
+    if not nodeid:
+        return None
+    stem = Path(nodeid.split("::")[0]).stem
+    return stem[len("test_"):] if stem.startswith("test_") else stem
+
+
+def get_report(run_id: str) -> Optional[dict]:
+    """Everything the Run Report screen needs in one call: the results
+    summary (see get_results), the per-test-case table joined with S7's
+    classification+reasoning, and the pipeline timeline."""
+    results = get_results(run_id)
+    if results is None:
+        return None
+    run_dir = find_run_dir(run_id)
+    return {
+        **results,
+        "test_cases": _test_case_rows(run_dir, run_id) if run_dir else [],
+        "timeline": get_activity_log(run_id),
+    }
