@@ -125,11 +125,11 @@ function renderBarChart(rows, opts = {}) {
 
 function sidebarNav(active) {
   const items = [
-    ["dashboard.html", "Dashboard"],
-    ["library.html", "Requirements"],
+    ["/static/dashboard.html", "Dashboard"],
+    ["/static/library.html", "Requirements"],
     ["/", "New run"],
-    ["library.html", "Reports"],
-    ["knowledge-store.html", "Knowledge store"],
+    ["/static/library.html", "Reports"],
+    ["/static/knowledge-store.html", "Knowledge store"],
   ];
   return `
     <div class="sidebar">
@@ -145,7 +145,7 @@ function sidebarNav(active) {
 }
 
 function topbarNav(active) {
-  const items = [["/", "New run"], ["library.html", "Run history"], ["knowledge-store.html", "Knowledge store"]];
+  const items = [["/", "New run"], ["/static/library.html", "Run history"], ["/static/knowledge-store.html", "Knowledge store"]];
   return `
     <div class="topbar">
       <div class="brand"><span class="mark">✓</span> QA Framework</div>

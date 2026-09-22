@@ -34,7 +34,7 @@
     <div class="card mt-lg">
       <div class="flex-between">
         <h3 style="margin:0;">Recent runs</h3>
-        <a href="library.html">View all &rarr;</a>
+        <a href="/static/library.html">View all &rarr;</a>
       </div>
       <table class="mt-lg" id="recentTable"></table>
     </div>
@@ -66,7 +66,7 @@ async function load() {
       <div><div class="label">Overall pass rate</div><div class="muted" style="font-size:0.78rem;">${d.total_tests} tests total</div></div>
     </div>
     ${statTile("Runs this month", d.runs_this_month)}
-    ${statTile("Awaiting your review", `<a href="library.html">${d.awaiting_review}</a>`, d.awaiting_review ? "Review now →" : "")}
+    ${statTile("Awaiting your review", `<a href="/static/library.html">${d.awaiting_review}</a>`, d.awaiting_review ? "Review now →" : "")}
     ${statTile("Confirmed rules active", d.confirmed_rules_active)}
   `;
 
@@ -80,7 +80,7 @@ async function load() {
     <tr><th>Requirement</th><th>Run</th><th>Tests</th><th>Result</th><th>Status</th></tr>
     ${d.recent_runs.map(r => `
       <tr>
-        <td><a href="report.html?id=${r.run_id}">${escapeHtml(r.title)}</a></td>
+        <td><a href="/static/report.html?id=${r.run_id}">${escapeHtml(r.title)}</a></td>
         <td class="mono muted">${r.run_ref}</td>
         <td>${r.counts ? r.counts.total : "—"}</td>
         <td>${r.counts ? `<span style="color:${r.counts.failed ? "var(--bad)" : "var(--good)"};font-weight:700;">${r.counts.passed} / ${r.counts.total}</span>` : "—"}</td>

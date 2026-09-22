@@ -72,7 +72,7 @@ function renderBanner(status, statusData) {
     box.innerHTML = `<div class="banner">
       <div><strong>Action needed: review requirement ambiguities</strong>
         <div class="muted" style="font-size:0.82rem;">S2 found items that need a confirmed answer before test cases can be generated.</div></div>
-      <a class="btn btn-primary" href="h1.html?id=${runId}">Review now</a>
+      <a class="btn btn-primary" href="/static/h1.html?id=${runId}">Review now</a>
     </div>`;
   } else if (status === "failed") {
     box.innerHTML = `<div class="banner" style="border-color:var(--bad);background:var(--bad-bg);">
@@ -97,7 +97,7 @@ function renderBanner(status, statusData) {
   } else if (status === "complete") {
     box.innerHTML = `<div class="banner" style="border-color:var(--good);background:var(--good-bg);">
       <div><strong>Run complete</strong></div>
-      <a class="btn btn-primary" href="report.html?id=${runId}">View report</a>
+      <a class="btn btn-primary" href="/static/report.html?id=${runId}">View report</a>
     </div>`;
   } else {
     box.innerHTML = "";

@@ -17,7 +17,7 @@
 <div class="app-shell">
   <div id="sidebar"></div>
   <div class="main">
-    <p class="muted"><a href="library.html">&larr; Library</a></p>
+    <p class="muted"><a href="/static/library.html">&larr; Library</a></p>
     <div class="flex-between">
       <div>
         <div class="flex gap-sm" style="align-items:center;">
@@ -129,7 +129,7 @@ async function load() {
   let r;
   try { r = await api(`/runs/${runId}/report`); }
   catch (e) {
-    document.querySelector(".main").innerHTML += `<div class="card mt-lg"><p>This run isn't complete yet, or wasn't found.</p><p><a href="run.html?id=${runId}">View live status &rarr;</a></p></div>`;
+    document.querySelector(".main").innerHTML += `<div class="card mt-lg"><p>This run isn't complete yet, or wasn't found.</p><p><a href="/static/run.html?id=${runId}">View live status &rarr;</a></p></div>`;
     return;
   }
 

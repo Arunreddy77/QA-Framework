@@ -56,8 +56,8 @@
 <script>
 document.getElementById("nav").innerHTML = topbarNav("");
 const runId = qs("id");
-document.getElementById("backLink").href = `run.html?id=${runId}`;
-document.getElementById("backLink2").href = `run.html?id=${runId}`;
+document.getElementById("backLink").href = `/static/run.html?id=${runId}`;
+document.getElementById("backLink2").href = `/static/run.html?id=${runId}`;
 
 const TAG_ORDER = ["FACT", "ASSUMPTION", "INFERENCE", "DECISION"];
 
@@ -111,7 +111,7 @@ async function submitDecision(approved) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approved, new_confirmed_rules, notes: document.getElementById("h1Notes").value }),
     });
-    location.href = `run.html?id=${runId}`;
+    location.href = `/static/run.html?id=${runId}`;
   } catch (e) {
     alert("Couldn't submit decision: " + e.message);
     document.getElementById("approveBtn").disabled = false;

@@ -10,7 +10,7 @@
 <div class="app-shell">
   <div id="sidebar"></div>
   <div class="main">
-    <p class="muted"><a href="dashboard.html">&larr; Dashboard</a></p>
+    <p class="muted"><a href="/static/dashboard.html">&larr; Dashboard</a></p>
     <div class="flex-between">
       <h1 style="margin:0;">Requirements library</h1>
       <a class="btn-primary" href="/">+ New run</a>
@@ -54,7 +54,7 @@ function bucketCounts(cards) {
 }
 
 function cardHtml(c) {
-  const reportHref = c.bucket === "needs_review" ? `h1.html?id=${c.latest_run_id}` : `report.html?id=${c.latest_run_id}`;
+  const reportHref = c.bucket === "needs_review" ? `/static/h1.html?id=${c.latest_run_id}` : `/static/report.html?id=${c.latest_run_id}`;
   return `
     <a href="${reportHref}" style="text-decoration:none;color:inherit;">
     <div class="card" style="height:100%;">
