@@ -145,8 +145,17 @@ async function load() {
   if (!r.allure_report_url) document.getElementById("allureLink").style.display = "none";
   document.getElementById("xlsxLink").href = r.test_cases_xlsx_url || "#";
   if (!r.test_cases_xlsx_url) document.getElementById("xlsxLink").style.display = "none";
-  document.getElementById("scriptsLink").href = r.scripts && r.scripts[0] ? r.scripts[0].url.replace(/\/[^/]+$/, "/") : "#";
-  if (!r.scripts || !r.scripts.length) document.getElementById("scriptsLink").style.display = "none";
+  // Links straight to the first generated script file, not the bare scripts/
+  // directory -- FastAPI's StaticFiles mount 404s on a directory URL since
+  // it doesn't serve directory listings by default. No dedicated
+  // scripts-listing view exists yet, so this is the honest fallback; the
+  // label reflects there may be more than one.
+  if (r.scripts && r.scripts.length) {
+    document.getElementById("scriptsLink").href = r.scripts[0].url;
+    document.getElementById("scriptsLink").textContent = r.scripts.length > 1 ? `First script (of ${r.scripts.length})` : "Script";
+  } else {
+    document.getElementById("scriptsLink").style.display = "none";
+  }
 
   const pct = counts.total ? Math.round(100 * counts.passed / counts.total) : null;
   document.getElementById("ringBox").innerHTML = renderRing(pct, { sub: `${counts.passed} of ${counts.total} passed` });
