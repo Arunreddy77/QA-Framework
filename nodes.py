@@ -120,6 +120,69 @@ def h1_gate(state: RunState) -> dict:
     return {"status": "rejected_at_h1", "h1_decision": decision}
 
 
+# Column order/labels for test_cases.xlsx -- (Excel header, S3 output.json key).
+# "Tags" is source_tags: the FACT/ASSUMPTION/INFERENCE/DECISION tags S3 carries
+# forward from S2 (see skills/S3_test_case_generation.md's Output format).
+TEST_CASE_XLSX_COLUMNS = [
+    ("Test Case ID", "test_case_id"),
+    ("Source Requirement ID", "source_requirement_id"),
+    ("Obligation", "obligation"),
+    ("Test Type", "test_type"),
+    ("Layer", "layer"),
+    ("Input Values", "input_values"),
+    ("Expected Result", "expected_result"),
+    ("Tags", "source_tags"),
+]
+
+
+def _xlsx_cell(value) -> str:
+    """Excel cells hold text, not nested Python data -- S3 emits input_values
+    and source_tags as a dict/list, so flatten those to compact JSON. Plain
+    strings and numbers pass through untouched."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, separators=(", ", ": "))
+    return "" if value is None else value
+
+
+def _write_test_cases_export(run_dir: Path, s3_output) -> None:
+    """
+    Writes test_cases.json (S3's output, verbatim) and test_cases.xlsx (one
+    row per test case, per TEST_CASE_XLSX_COLUMNS) into a run's evidence
+    folder. Runs for every run, terminal or UI-triggered, since both go
+    through this same node. Never raises -- a failed export (e.g. S3
+    returned something odd) shouldn't fail the run; it just leaves the
+    files missing, and s9_report's evidence links reflect that.
+    """
+    (run_dir / "test_cases.json").write_text(json.dumps(s3_output, indent=2), encoding="utf-8")
+
+    cases = s3_output.get("test_cases", []) if isinstance(s3_output, dict) else list(s3_output or [])
+    if not cases:
+        return
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Test Cases"
+    headers = [h for h, _ in TEST_CASE_XLSX_COLUMNS]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        ws.append([_xlsx_cell(case.get(key)) for _, key in TEST_CASE_XLSX_COLUMNS])
+
+    for i, header in enumerate(headers, start=1):
+        col_lengths = [len(header)] + [len(str(row[i - 1].value or "")) for row in ws.iter_rows(min_row=2)]
+        width = max(col_lengths)
+        ws.column_dimensions[get_column_letter(i)].width = min(width + 2, 80)
+
+    wb.save(run_dir / "test_cases.xlsx")
+
+
 def s3_generate_test_cases(state: RunState) -> dict:
     payload = {
         "normalized_requirement": state["s1_output"],
@@ -132,6 +195,7 @@ def s3_generate_test_cases(state: RunState) -> dict:
     # under every provider's ceiling in use here (Claude Haiku 4.5: 64K,
     # OpenRouter's nemotron-3-ultra: 65536) while giving plenty of room.
     output = call_skill("S3_test_case_generation.md", payload, max_tokens=32768)
+    _write_test_cases_export(run_evidence_dir(state["correlation_id"], state.get("run_slug")), output)
     return {"s3_output": output}
 
 
@@ -244,6 +308,7 @@ def s6_execute(state: RunState) -> dict:
     results = [
         {
             "test_case_id": t.get("nodeid", "").split("::")[-1].replace("test_", "", 1),
+            "nodeid": t.get("nodeid"),
             "status": t.get("outcome", "unknown"),
             "duration_seconds": t.get("duration"),
         }
@@ -261,6 +326,137 @@ def s6_execute(state: RunState) -> dict:
     }
 
 
+# The five values S7's skill may return for `classification` (skills/S7_failure_classification.md).
+S7_CLASSIFICATIONS = {"app_bug", "flaky", "environment", "automation_error", "unclassified_pending_triage"}
+
+
+def _script_stem(nodeid: str) -> str:
+    """'.../scripts/test_TC001.py::test_x[chromium]' -> 'TC001': the S5 test_case_id
+    as s6_execute sanitised it into the script's file name."""
+    stem = Path(nodeid.split("::")[0]).stem
+    return stem[len("test_"):] if stem.startswith("test_") else stem
+
+
+def _s3_cases_by_stem(state: RunState) -> dict:
+    """S3's test cases, keyed the same way script files are named, so a
+    failing test can be traced back to the test case it implements."""
+    s3 = state.get("s3_output")
+    cases = s3.get("test_cases", []) if isinstance(s3, dict) else list(s3 or [])
+    return {
+        re.sub(r"[^a-zA-Z0-9_]", "_", str(c.get("test_case_id"))): c
+        for c in cases if isinstance(c, dict)
+    }
+
+
+def _failure_details(test: dict) -> tuple:
+    """(error message, traceback tail) from whichever stage of a
+    pytest-json-report entry actually failed."""
+    for stage in ("setup", "call", "teardown"):
+        s = test.get(stage) or {}
+        if s.get("outcome") in ("failed", "error"):
+            return (s.get("crash") or {}).get("message", ""), (s.get("longrepr") or "")[-2000:]
+    return "", ""
+
+
+def s7_classify_failures(state: RunState) -> dict:
+    """
+    Classifies every failed test S6 ran as app_bug / flaky / environment /
+    automation_error (or unclassified_pending_triage when the evidence
+    can't settle it), so S9 never has to report on an unclassified
+    failure. Reads the error details from the pytest report S6 wrote,
+    since S6's own output only carries status and duration. If nothing
+    failed there is nothing to classify and no AI call is made.
+    Always writes evidence/<run folder>/S7_classifications.json.
+    """
+    correlation_id = state["correlation_id"]
+    run_slug = state.get("run_slug")
+    run_dir = run_evidence_dir(correlation_id, run_slug)
+
+    try:
+        pytest_report = json.loads((run_dir / "pytest-report.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pytest_report = {}
+    failed = [t for t in pytest_report.get("tests", []) if t.get("outcome") in ("failed", "error")]
+
+    cases_by_stem = _s3_cases_by_stem(state)
+    script_dir = scripts_dir(correlation_id, run_slug)
+    failures, used_ids = [], set()
+    for t in failed:
+        nodeid = t.get("nodeid", "")
+        stem = _script_stem(nodeid)
+        case = cases_by_stem.get(stem)
+        test_ref = f"{Path(nodeid.split('::')[0]).name}::{nodeid.split('::', 1)[-1]}"
+        case_id = str(case["test_case_id"]) if case else test_ref
+        if case_id in used_ids:  # e.g. one script with several parametrised tests
+            case_id = test_ref
+        used_ids.add(case_id)
+        message, tb_tail = _failure_details(t)
+        script_file = script_dir / Path(nodeid.split("::")[0]).name
+        failures.append({
+            "nodeid": nodeid,
+            "test_case_id": case_id,
+            "test_ref": test_ref,
+            "s3_test_case": case,
+            "error_message": message,
+            "traceback_tail": tb_tail,
+            "script_code": script_file.read_text(encoding="utf-8")[:3000] if script_file.exists() else None,
+            "attempts": 1,  # S6 doesn't retry, so every test ran exactly once
+            "passed_on_retry": False,
+        })
+
+    classifications = []
+    if failures:
+        payload = {
+            "run_id": state["run_id"],
+            "failed_tests": [{k: v for k, v in f.items() if k != "nodeid"} for f in failures],
+            "confirmed_domain_rules": knowledge_store.get_confirmed_rules(),
+            "flaky_history": "not available yet",
+        }
+        output = call_skill("S7_failure_classification.md", payload, max_tokens=16384)
+
+        raw = output.get("classifications") if isinstance(output, dict) else None
+        if raw is None and isinstance(output, dict) and "classification" in output:
+            raw = [output]  # a bare single classification instead of the wrapper
+        returned = {}
+        for c in raw or []:
+            if isinstance(c, dict) and c.get("test_case_id") is not None:
+                returned.setdefault(str(c["test_case_id"]), c)
+
+        # Never drop a failure, and never let a malformed answer stop the run:
+        # anything S7 didn't classify cleanly becomes pending triage, visibly.
+        for f in failures:
+            c = returned.get(f["test_case_id"])
+            problem = None
+            if c is None:
+                c, problem = {}, "S7 returned no classification for this test"
+            label = str(c.get("classification", "")).strip().lower().replace("/", "_").replace(" ", "_").replace("-", "_")
+            if label not in S7_CLASSIFICATIONS:
+                problem = problem or f"S7 returned an unrecognised classification {c.get('classification')!r}"
+                label = "unclassified_pending_triage"
+            entry = {
+                "nodeid": f["nodeid"],
+                "test_case_id": f["test_case_id"],
+                "classification": label,
+                "evidence_trail": c.get("evidence_trail") or problem or "",
+                "confidence": c.get("confidence"),
+                "flaky_history_flag": bool(c.get("flaky_history_flag", False)),
+            }
+            if problem:
+                entry["coerced_because"] = problem
+            classifications.append(entry)
+
+    (run_dir / "S7_classifications.json").write_text(
+        json.dumps({
+            "run_id": state["run_id"],
+            "tests_run": len(pytest_report.get("tests", [])),
+            "failed_test_count": len(failures),
+            "classifications": classifications,
+        }, indent=2),
+        encoding="utf-8",
+    )
+    return {"s7_output": {"classifications": classifications}}
+
+
 def s9_report(state: RunState) -> dict:
     correlation_id = state["correlation_id"]
     run_slug = state.get("run_slug")
@@ -273,8 +469,26 @@ def s9_report(state: RunState) -> dict:
     )
     allure_report_path = str(report_dir / "index.html") if allure_gen.returncode == 0 else None
 
+    # S6's results, with each failed test's S7 classification attached, and
+    # each test's layer (UI/API) taken from the S3 test case it implements.
+    cases_by_stem = _s3_cases_by_stem(state)
+    classifications = {
+        c["nodeid"]: c for c in (state.get("s7_output") or {}).get("classifications", [])
+    }
+    results = []
+    for r in state["s6_output"].get("results", []):
+        r = dict(r)
+        case = cases_by_stem.get(_script_stem(r.get("nodeid") or ""))
+        if case and case.get("layer"):
+            r["layer"] = case["layer"]
+        c = classifications.get(r.get("nodeid"))
+        if c:
+            r["classification"] = c["classification"]
+            r["classification_evidence"] = c["evidence_trail"]
+        results.append(r)
+
     payload = {
-        "classified_results": state["s6_output"],  # no S7 yet -- unclassified
+        "classified_results": {**state["s6_output"], "results": results},
         "violations": [],  # no S8 yet
         "baseline": None,
     }

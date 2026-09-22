@@ -1,5 +1,5 @@
 """
-The Phase 2 graph: S1 -> S2 -> H1 (real pause/resume) -> S3 -> S5 -> S6 -> S9.
+The Phase 2 graph: S1 -> S2 -> H1 (real pause/resume) -> S3 -> S5 -> S6 -> S7 -> S9.
 If a human rejects at H1, the run ends there rather than continuing --
 that's the whole point of a gate: nothing downstream should be able
 to proceed past an unresolved ambiguity.
@@ -17,6 +17,7 @@ from nodes import (
     s3_generate_test_cases,
     s5_generate_scripts,
     s6_execute,
+    s7_classify_failures,
     s9_report,
 )
 
@@ -39,6 +40,7 @@ def build_graph():
     builder.add_node("s3_generate_test_cases", s3_generate_test_cases)
     builder.add_node("s5_generate_scripts", s5_generate_scripts)
     builder.add_node("s6_execute", s6_execute)
+    builder.add_node("s7_classify_failures", s7_classify_failures)
     builder.add_node("s9_report", s9_report)
 
     builder.add_edge(START, "s1_normalize")
@@ -47,7 +49,8 @@ def build_graph():
     builder.add_conditional_edges("h1_gate", _after_h1, ["s3_generate_test_cases", END])
     builder.add_edge("s3_generate_test_cases", "s5_generate_scripts")
     builder.add_edge("s5_generate_scripts", "s6_execute")
-    builder.add_edge("s6_execute", "s9_report")
+    builder.add_edge("s6_execute", "s7_classify_failures")
+    builder.add_edge("s7_classify_failures", "s9_report")
     builder.add_edge("s9_report", END)
 
     # Deliberately not using PostgresSaver as a `with` block -- that

@@ -26,6 +26,7 @@ class RunState(TypedDict, total=False):
     s4_output: list  # not built yet -- see nodes.py note on the remaining gap
     s5_output: list
     s6_output: dict
+    s7_output: dict  # failure classifications from S7: {"classifications": [...]}
     s9_output: dict
 
     # Bookkeeping
