@@ -26,12 +26,14 @@ Converts H2-approved test case specifications into executable Playwright automat
 
 - Generated scripts MUST be valid Python, not JavaScript/TypeScript.
 - Each test function MUST be named with a `test_` prefix (pytest's discovery convention).
-- Each test function MUST accept Playwright's `page` fixture as a parameter (from `pytest-playwright`), e.g. `def test_forgot_password_valid_email(page):`.
+- **A test function's parameters depend on the test case's `layer`, and this is not optional:**
+  - **UI, or "both":** MUST accept Playwright's `page` fixture as a parameter (from `pytest-playwright`), e.g. `def test_forgot_password_valid_email(page):`.
+  - **API only:** MUST take no fixture parameter at all — `def test_valid_search_term_returns_matching_products():`, nothing in the parentheses. Do NOT accept `page` "just in case." Requesting `page` on a pure-API test makes `pytest-playwright` open a real browser page that the test body never touches — the run wastes a browser launch, and on failure it screenshots that blank, never-navigated page, producing a meaningless white image instead of the request/response evidence that actually matters for an API test. If a test case is layer `"both"`, it needs `page` because it does have a UI portion; if it's layer `"API"` alone, it does not, ever.
 - Imports MUST use Python syntax (e.g. `import pytest`), never JavaScript/TypeScript import syntax (e.g. never `import { test, expect } from '@playwright/test'`).
 - Assertions MUST use Python's `assert` statement or Playwright Python's `expect()` from `playwright.sync_api` — never JavaScript's `expect()` from `@playwright/test`.
-- For API-layer test cases, use Python's `requests` library (`import requests`; `requests.post(url, data={...}, timeout=...)`). Do NOT take a parameter named `request` in a test function: in pytest that name is pytest's own built-in fixture (not an HTTP client), and calling `.get()`/`.post()` on it fails. Never use JavaScript's `fetch` or the `request` object from `@playwright/test` either.
+- For API-layer test cases, use Python's `requests` library (`import requests`; `requests.post(url, data={...}, timeout=...)`) — this is the project's standard HTTP client; do not introduce a different one. Do NOT take a parameter named `request` in a test function either: in pytest that name is pytest's own built-in fixture (not an HTTP client), and calling `.get()`/`.post()` on it fails. Never use JavaScript's `fetch` or the `request` object from `@playwright/test`. API test evidence is the actual HTTP request/response — status code, response body, timing — captured via assertions and `pytest`'s own output, never a screenshot standing in for it.
 
-Example of a correctly-formatted Python test function (UI layer):
+Example of a correctly-formatted Python test function (UI layer — takes `page`):
 
 ```python
 import pytest
@@ -44,7 +46,24 @@ def test_forgot_password_valid_email(page):
     expect(page.get_by_text("If an account exists, a reset link has been sent.")).to_be_visible()
 ```
 
-A script that is valid JavaScript/TypeScript Playwright but not valid Python fails this skill's job entirely, regardless of how correct its locators or assertions are — it cannot run in this project's Python/pytest test suite at all.
+Example of a correctly-formatted Python test function (API layer — takes nothing, no `page`, no browser involved at all):
+
+```python
+import requests
+
+def test_valid_search_term_returns_matching_products():
+    response = requests.post(
+        "https://example.com/api/searchProduct",
+        data={"search_product": "top"},
+        timeout=10,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["responseCode"] == 200
+    assert len(body["products"]) > 0
+```
+
+A script that is valid JavaScript/TypeScript Playwright but not valid Python fails this skill's job entirely, regardless of how correct its locators or assertions are — it cannot run in this project's Python/pytest test suite at all. A pure-API script that takes `page` anyway fails this skill's job just as much, even though it happens to run without crashing — it silently launches a browser this test case never asked for.
 
 **Step 1 — For UI test cases, choose locators in the required order:** role/label/text-based semantic locators first, `data-test-id` attributes next, CSS selectors after that. XPath only as a last resort, and only with a documented reason in the script's metadata. Never locate by dynamically generated IDs or framework-specific class names.
 
@@ -90,6 +109,7 @@ Each entry in the `scripts` array has these fields:
 - Use a locator strategy or wait strategy that deviates from Section 13.1 without documenting why and flagging it for H3's attention.
 - Weaken an API assertion (e.g., checking "2xx" instead of the exact required status code) to avoid a failure.
 - Generate a script for a test case that hasn't passed H2.
+- Accept Playwright's `page` fixture in a test function for a test case whose `layer` is `API` alone. Opening a browser page that the test body never uses isn't harmless — it wastes a browser launch and, on failure, produces a screenshot of nothing instead of the actual request/response evidence.
 
 ---
 
